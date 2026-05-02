@@ -1,0 +1,17 @@
+# Maven build output
+target/
+
+# Generated report files (written to CWD when the test runs)
+*.csv
+*.json
+
+# Captured run logs
+runs/
+test_output*.txt
+
+# IDE and OS files
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
