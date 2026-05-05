@@ -30,6 +30,20 @@ public class WebsiteMetrics {
     /** Time from navigation start to DOM interactive state. */
     private long domInteractiveTime = -1;
 
+    // ── IPv4 / IPv6 TCP reachability probes (port 443, Java-side) ────────────
+    /** True if a TCP connection to port 443 over IPv4 (A record) succeeded. */
+    private boolean ipv4Reachable;
+    /** True if a TCP connection to port 443 over IPv6 (AAAA record) succeeded. */
+    private boolean ipv6Reachable;
+    /** First IPv4 address resolved for the domain, or null if no A record found. */
+    private String  ipv4Address;
+    /** First IPv6 address resolved for the domain, or null if no AAAA record found. */
+    private String  ipv6Address;
+    /** TCP connect time to the IPv4 address in ms; -1 if probe was not run. */
+    private long    ipv4ConnectMs = -1;
+    /** TCP connect time to the IPv6 address in ms; -1 if probe was not run. */
+    private long    ipv6ConnectMs = -1;
+
     private boolean success;
     private String errorMessage;
 
@@ -70,6 +84,24 @@ public class WebsiteMetrics {
 
     public long getDomInteractiveTime()         { return domInteractiveTime; }
     public void setDomInteractiveTime(long v)   { this.domInteractiveTime = v; }
+
+    public boolean isIpv4Reachable()            { return ipv4Reachable; }
+    public void    setIpv4Reachable(boolean v)  { this.ipv4Reachable = v; }
+
+    public boolean isIpv6Reachable()            { return ipv6Reachable; }
+    public void    setIpv6Reachable(boolean v)  { this.ipv6Reachable = v; }
+
+    public String getIpv4Address()              { return ipv4Address; }
+    public void   setIpv4Address(String v)      { this.ipv4Address = v; }
+
+    public String getIpv6Address()              { return ipv6Address; }
+    public void   setIpv6Address(String v)      { this.ipv6Address = v; }
+
+    public long getIpv4ConnectMs()              { return ipv4ConnectMs; }
+    public void setIpv4ConnectMs(long v)        { this.ipv4ConnectMs = v; }
+
+    public long getIpv6ConnectMs()              { return ipv6ConnectMs; }
+    public void setIpv6ConnectMs(long v)        { this.ipv6ConnectMs = v; }
 
     public boolean isSuccess()                  { return success; }
     public void    setSuccess(boolean success)  { this.success = success; }

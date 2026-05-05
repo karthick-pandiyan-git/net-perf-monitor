@@ -3,32 +3,26 @@ package com.youtube.perf;
 import java.util.List;
 
 /**
- * Result of a single DNS query (one tool, one domain, one point in time).
+ * Result of a single DNS query (one record type, one domain, one point in time).
  */
 public class DnsResult {
 
-    /** "nslookup" or "dig". */
-    private String tool;
+    /** DNS record type queried: "A" (IPv4) or "AAAA" (IPv6). */
+    private String recordType;
     private String domain;
     private long timestamp;
 
-    /**
-     * Query response time in milliseconds.
-     * For nslookup: total process wall-clock time (nslookup does not expose query time).
-     * For dig: value parsed from the "Query time: X msec" line in the output.
-     */
+    /** Query response time in milliseconds — true round-trip latency to the resolver. */
     private long responseTimeMs;
 
     private List<String> resolvedAddresses;
     private boolean success;
-    /** Full command output, useful for debugging. May be null on error. */
-    private String rawOutput;
     private String errorMessage;
 
     // ── Getters & Setters ─────────────────────────────────────────────────────
 
-    public String getTool()                         { return tool; }
-    public void   setTool(String tool)              { this.tool = tool; }
+    public String getRecordType()                   { return recordType; }
+    public void   setRecordType(String recordType)  { this.recordType = recordType; }
 
     public String getDomain()                       { return domain; }
     public void   setDomain(String domain)          { this.domain = domain; }
@@ -44,9 +38,6 @@ public class DnsResult {
 
     public boolean isSuccess()                      { return success; }
     public void    setSuccess(boolean success)      { this.success = success; }
-
-    public String getRawOutput()                    { return rawOutput; }
-    public void   setRawOutput(String raw)          { this.rawOutput = raw; }
 
     public String getErrorMessage()                 { return errorMessage; }
     public void   setErrorMessage(String msg)       { this.errorMessage = msg; }

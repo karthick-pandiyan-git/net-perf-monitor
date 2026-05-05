@@ -5,11 +5,18 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 /**
  * Entry point. Runs three probes in parallel:
@@ -47,6 +54,15 @@ public class Main {
         List<String> websiteUrls = config.getWebsiteUrls();
         List<String> dnsDomains  = config.getDnsDomains();
         int durationSeconds      = config.getDurationSeconds();
+        Set<String>  mode        = config.getMode();
+
+        // Derive which probes to run from the mode set
+        boolean runYoutube = mode.contains("youtube");
+        boolean runWebsite = mode.contains("website");
+        boolean runDns     = mode.contains("dns");
+
+        // Human-readable mode label for output (sorted for consistency)
+        String modeLabel = mode.stream().sorted().collect(Collectors.joining(","));
         // ── Windows UTF-8 console fix ────────────────────────────────────────
         //
         // Two independent layers must both use UTF-8 for box-drawing characters
@@ -97,111 +113,235 @@ public class Main {
                 true, java.nio.charset.StandardCharsets.UTF_8));
         } catch (Exception ignored) {}
 
+        List<String> probeNames = new java.util.ArrayList<>();
+        if (runYoutube) probeNames.add("YouTube");
+        if (runWebsite) probeNames.add("Website");
+        if (runDns)     probeNames.add("DNS");
+        String title = String.join(" + ", probeNames) + " Performance Monitor";
+        // Centre the title inside the 54-character inner width of the banner box.
+        int innerWidth = 54;
+        int padding = Math.max(0, (innerWidth - title.length()) / 2);
+        String centred = " ".repeat(padding) + title;
+        centred = centred + " ".repeat(Math.max(0, innerWidth - centred.length()));
         System.out.println("╔══════════════════════════════════════════════════════╗");
-        System.out.println("║         YouTube + Website Performance Tester          ║");
+        System.out.println("║" + centred + "║");
         System.out.println("╚══════════════════════════════════════════════════════╝");
+        System.out.printf("Mode         : %s%n", modeLabel);
         System.out.printf("Duration     : %d s%n", durationSeconds);
-        System.out.printf("YouTube tabs : %d%n", youtubeUrls.size());
-        System.out.printf("Website tabs : %d  (refresh every 5 s for %d s)%n", websiteUrls.size(), durationSeconds);
-        System.out.printf("DNS monitor  : 8.8.8.8 (direct UDP, no OS cache) on %d domains for %d s  [%s]%n%n",
+        if (runYoutube) System.out.printf("YouTube tabs : %d%n", youtubeUrls.size());
+        if (runWebsite) System.out.printf("Website tabs : %d  (refresh every 5 s for %d s)%n", websiteUrls.size(), durationSeconds);
+        if (runDns)     System.out.printf("DNS monitor  : 8.8.8.8 (direct UDP, no OS cache) on %d domains for %d s  [%s]%n",
             dnsDomains.size(), durationSeconds, String.join(", ", dnsDomains));
+        int reportIntervalSecs = config.getReportIntervalSeconds();
+        if (reportIntervalSecs > 0) System.out.printf("Report every : %d s%n", reportIntervalSecs);
+        System.out.println();
 
-        logger.info("Launching all three probes in parallel...");
+        logger.info("Launching probes in parallel (mode={})...", modeLabel);
 
-        // Barrier for the two browser probes: YouTube and Website open their tabs
-        // first, then count down. Once both are ready the barrier opens and they
-        // start their measurement windows at the same instant.
-        // DNS is intentionally excluded from this barrier — it starts immediately
-        // so it can capture any connectivity failures that occur while the browsers
-        // are still opening tabs (e.g. a WiFi disconnect during setup).
-        CountDownLatch startLatch  = new CountDownLatch(2);
-        // Counted down by Main after browser probes complete, signalling DNS to stop.
+        // ── Thread-safe shared lists for live in-progress results ────────────
+        // Each probe writes into its own CopyOnWriteArrayList so the periodic
+        // reporter thread can read a safe snapshot at any time without locks.
+        // YouTube: entries are added by YouTubePerformanceTester itself once tabs
+        // are open. The list is empty during browser setup, which is correct —
+        // a snapshot that fires during setup simply shows no YouTube data yet.
+        List<VideoMetrics>   liveYt  = runYoutube ? new CopyOnWriteArrayList<>() : null;
+        List<WebsiteMetrics> liveWeb = runWebsite ? new CopyOnWriteArrayList<>() : null;
+        List<DnsResult>      liveDns = runDns     ? new CopyOnWriteArrayList<>() : null;
+
+        // startLatch synchronises the two browser probes so their measurement
+        // windows begin at the same moment. Count equals the number of browser
+        // probes that are actually running.
+        int browserProbeCount = (runYoutube ? 1 : 0) + (runWebsite ? 1 : 0);
+        CountDownLatch startLatch   = new CountDownLatch(browserProbeCount);
+        // Counted down after all browser probes finish to signal DNS to stop.
         CountDownLatch dnsStopLatch = new CountDownLatch(1);
 
-        // ── Submit all three probes concurrently ─────────────────────────────
-        ExecutorService executor = Executors.newFixedThreadPool(3);
+        // ── Submit selected probes concurrently ──────────────────────────────
+        int poolSize = (runYoutube ? 1 : 0) + (runWebsite ? 1 : 0) + (runDns ? 1 : 0);
+        ExecutorService executor = Executors.newFixedThreadPool(Math.max(1, poolSize));
 
-        Future<List<VideoMetrics>>   ytFuture  = executor.submit(
-            () -> new YouTubePerformanceTester().runTest(youtubeUrls, startLatch, durationSeconds));
-        Future<List<WebsiteMetrics>> webFuture = executor.submit(
-            new WebsiteTester(websiteUrls, startLatch, durationSeconds));
-        Future<List<DnsResult>>      dnsFuture = executor.submit(
-            new DnsMonitor(dnsDomains, dnsStopLatch));
+        Future<List<VideoMetrics>>   ytFuture  = null;
+        Future<List<WebsiteMetrics>> webFuture = null;
+        Future<List<DnsResult>>      dnsFuture = null;
+
+        // Absolute deadline from program launch — setup time (Chrome opening, page loads)
+        // is consumed from this budget so total wall-clock time equals durationSeconds.
+        final long programStartMs     = System.currentTimeMillis();
+        final long absoluteDeadlineMs = programStartMs + durationSeconds * 1000L;
+
+        if (runYoutube) {
+            final List<VideoMetrics> ly = liveYt;
+            ytFuture = executor.submit(
+                () -> new YouTubePerformanceTester().runTest(youtubeUrls, startLatch, durationSeconds, ly, programStartMs));
+        }
+        if (runWebsite) {
+            webFuture = executor.submit(
+                new WebsiteTester(websiteUrls, startLatch, durationSeconds, liveWeb, programStartMs));
+        }
+        if (runDns) {
+            dnsFuture = executor.submit(new DnsMonitor(dnsDomains, dnsStopLatch, liveDns));
+        }
 
         executor.shutdown();
 
-        // ── Collect results ───────────────────────────────────────────────────
-        List<VideoMetrics>   ytResults  = null;
-        List<WebsiteMetrics> webResults = null;
-        List<DnsResult>      dnsResults = null;
-
-        // Each probe is collected independently so a failure in one does not
-        // discard results already gathered by the other.
-        try {
-            ytResults = ytFuture.get(10, TimeUnit.MINUTES);
-        } catch (Exception e) {
-            // Log only the root cause message — ExecutionException wraps a verbose
-            // Selenium exception that includes the full browser capabilities dump,
-            // which makes logs unreadable. The root cause is the real signal.
-            logger.error("YouTube probe failed: {}", rootCause(e));
-            ytFuture.cancel(true);
+        // When no browser probes are running, the dnsStopLatch will never be
+        // counted down by probe collection. A timer thread handles it instead,
+        // stopping DNS at the absolute deadline.
+        if (runDns && browserProbeCount == 0) {
+            Thread timer = new Thread(() -> {
+                try {
+                    long remaining = absoluteDeadlineMs - System.currentTimeMillis();
+                    if (remaining > 0) Thread.sleep(remaining);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                dnsStopLatch.countDown();
+            });
+            timer.setDaemon(true);
+            timer.setName("dns-stop-timer");
+            timer.start();
         }
 
-        try {
-            // Website may have partial results even if YouTube failed — always collect.
-            webResults = webFuture.get(5, TimeUnit.MINUTES);
-        } catch (Exception e) {
-            logger.error("Website probe failed: {}", rootCause(e));
-            webFuture.cancel(true);
-        } finally {
-            // Always signal DNS to stop after both browser probes are done.
-            dnsStopLatch.countDown();
+        // ── Periodic JSON reporter ────────────────────────────────────────────
+        // The scheduler starts only AFTER the measurement window opens (both
+        // browser probes have synced on startLatch).  This ensures that
+        // "--report 5" means "every 5 s of actual measurement time", not
+        // "5 s from program launch" (which includes browser setup time).
+        //
+        // For DNS-only mode startLatch has count 0, so await() returns
+        // immediately and the scheduler starts right away.
+        AtomicReference<ScheduledExecutorService> schedulerRef = new AtomicReference<>();
+        AtomicInteger snapshotNum    = new AtomicInteger(0);
+        // Tracks the start of the current snapshot window so each snapshot
+        // only includes data collected SINCE the previous snapshot fired.
+        AtomicLong windowStartTs = new AtomicLong(0);
+
+        if (reportIntervalSecs > 0) {
+            final String lm       = modeLabel;
+            final int    dur      = durationSeconds;
+            final long   startMs  = programStartMs;
+            final long   intervalMs = reportIntervalSecs * 1000L;
+            final CountDownLatch sl = startLatch;
+
+            // Snapshot windows are anchored to programStartMs, not to when setup
+            // completes.  With "--report 30" the first snapshot fires at t=30 s from
+            // program launch, the second at t=60 s, etc., regardless of how long
+            // tab setup took.  windowStartTs begins at programStartMs so each
+            // snapshot window filter covers data since the previous boundary.
+            windowStartTs.set(startMs);
+
+            Thread schedulerStarter = new Thread(() -> {
+                try {
+                    sl.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+
+                // Calculate how long to wait from NOW until the next report boundary
+                // aligned to programStartMs.  If setup already consumed more than one
+                // interval (e.g. --report 10 but setup took 25 s), we jump to the next
+                // boundary that hasn't fired yet.
+                long elapsedMs        = System.currentTimeMillis() - startMs;
+                long intervalsElapsed = elapsedMs / intervalMs;
+                long nextBoundaryMs   = (intervalsElapsed + 1) * intervalMs; // ms from startMs
+                long initialDelayMs   = nextBoundaryMs - elapsedMs;
+                if (initialDelayMs < 0) initialDelayMs = 0;
+
+                ScheduledExecutorService sch = Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "periodic-reporter");
+                    t.setDaemon(true);
+                    return t;
+                });
+                schedulerRef.set(sch);
+                sch.scheduleAtFixedRate(() -> {
+                    long from = windowStartTs.get();
+                    int  snap = snapshotNum.incrementAndGet();
+                    System.out.println();
+                    System.out.println("--- Snapshot #" + snap + " ---");
+                    new JsonReporter().printJson(lm, dur, snap, from, liveYt, liveWeb, liveDns);
+                    // Advance window start to the current boundary so the next
+                    // snapshot only shows data collected since this one fired.
+                    windowStartTs.set(System.currentTimeMillis());
+                }, initialDelayMs, intervalMs, TimeUnit.MILLISECONDS);
+            }, "scheduler-starter");
+            schedulerStarter.setDaemon(true);
+            schedulerStarter.start();
         }
 
-        try {
-            // Allow DNS extra time beyond the test duration for final round to complete
-            dnsResults = dnsFuture.get(durationSeconds + 60L, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            logger.error("DNS probe failed: {}", rootCause(e));
-            dnsFuture.cancel(true);
+        // ── Collect results ──────────────────────────────────────────────────
+        if (ytFuture != null) {
+            try {
+                ytFuture.get(10, TimeUnit.MINUTES);
+            } catch (Exception e) {
+                logger.error("YouTube probe failed: {}", rootCause(e));
+                ytFuture.cancel(true);
+            } finally {
+                // If no website probe is running, signal DNS to stop now.
+                if (webFuture == null) {
+                    dnsStopLatch.countDown();
+                }
+            }
         }
 
-        // ── Print YouTube detail report + save files ──────────────────────────
-        if (ytResults != null && !ytResults.isEmpty()) {
+        if (webFuture != null) {
+            try {
+                webFuture.get(5, TimeUnit.MINUTES);
+            } catch (Exception e) {
+                logger.error("Website probe failed: {}", rootCause(e));
+                webFuture.cancel(true);
+            } finally {
+                // Always signal DNS after the last browser probe finishes.
+                dnsStopLatch.countDown();
+            }
+        }
+
+        if (dnsFuture != null) {
+            try {
+                dnsFuture.get(durationSeconds + 60L, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                logger.error("DNS probe failed: {}", rootCause(e));
+                dnsFuture.cancel(true);
+            }
+        }
+
+        // Stop the periodic reporter before printing the final report so
+        // they don't interleave.
+        ScheduledExecutorService scheduler = schedulerRef.get();
+        if (scheduler != null) {
+            scheduler.shutdown();
+            try { scheduler.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+        }
+
+        // ── Final JSON snapshot (fromTs=0 → show every cycle, no window filter) ──
+        System.out.println();
+        System.out.println("--- FINAL ---");
+        new JsonReporter().printJson(modeLabel, durationSeconds, 0, 0L, liveYt, liveWeb, liveDns);
+
+        // ── Combined Final Report (console table view) ───────────────────────
+        if (liveYt != null && !liveYt.isEmpty()) {
             PerformanceReporter reporter = new PerformanceReporter();
-            reporter.printConsoleReport(ytResults);
-            reporter.saveCsvReport(ytResults, "youtube_performance_report.csv");
-            reporter.saveJsonReport(ytResults, "youtube_performance_report.json");
-        } else {
-            System.out.println("\n[YouTube] No results collected.");
+            reporter.printConsoleReport(liveYt);
+            reporter.saveCsvReport(liveYt, "youtube_performance_report.csv");
+            reporter.saveJsonReport(liveYt, "youtube_performance_report.json");
         }
 
-        // ── Print Website + DNS detail reports ────────────────────────────────
         WebsiteReporter websiteReporter = new WebsiteReporter();
 
-        if (webResults != null && !webResults.isEmpty()) {
-            websiteReporter.printWebsiteReport(webResults);
-        } else {
-            System.out.println("\n[Website] No results collected.");
+        if (liveWeb != null && !liveWeb.isEmpty()) {
+            websiteReporter.printWebsiteReport(liveWeb);
         }
 
-        if (dnsResults != null && !dnsResults.isEmpty()) {
-            websiteReporter.printDnsReport(dnsResults);
-        } else {
-            System.out.println("\n[DNS] No results collected.");
+        if (liveDns != null && !liveDns.isEmpty()) {
+            websiteReporter.printDnsReport(liveDns);
         }
 
-        // ── Combined Final Report: YouTube + Website + DNS ────────────────────
-        // Pass an empty list (not null) when YouTube was attempted but produced no
-        // metrics — this lets printFinalSummary distinguish "not attempted" (null)
-        // from "attempted but failed" (empty list), so it can show [FAIL] rather
-        // than [N/A] when YouTube failed to load.
-        List<VideoVerdict> verdicts = (ytResults != null && !ytResults.isEmpty())
-            ? new PerformanceEvaluator().evaluateAll(ytResults)
-            : (ytResults != null ? java.util.Collections.emptyList() : null);
-        websiteReporter.printFinalSummary(verdicts, webResults, dnsResults);
+        List<VideoVerdict> verdicts = (liveYt != null && !liveYt.isEmpty())
+            ? new PerformanceEvaluator().evaluateAll(liveYt)
+            : (liveYt != null ? java.util.Collections.emptyList() : null);
+        websiteReporter.printFinalSummary(verdicts, liveWeb, liveDns);
 
-        logger.info("All reports complete.");
+        logger.info("All probes complete.");
     }
 
     /**

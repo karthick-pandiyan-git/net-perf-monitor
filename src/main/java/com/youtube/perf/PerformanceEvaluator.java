@@ -43,10 +43,10 @@ public class PerformanceEvaluator {
      * TTFB thresholds.
      * Tab 1 pays a cold-connection penalty (uncached DNS, new TCP+TLS handshake).
      * All other tabs reuse warm HTTP/2 connections to YouTube's CDN.
-     * 800 ms warm threshold accommodates normal CDN latency variation;
-     * at > 800 ms the connection latency is consistently affecting streaming.
+     * 1500 ms warm threshold accommodates normal CDN latency variation;
+     * at > 1500 ms the connection latency is consistently affecting streaming.
      */
-    private static final long MAX_TTFB_MS      = 1_200;
+    private static final long MAX_TTFB_MS      = 1_500;
     private static final long MAX_TTFB_COLD_MS = 3_000;
 
     /**

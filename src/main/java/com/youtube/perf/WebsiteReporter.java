@@ -72,26 +72,28 @@ public class WebsiteReporter {
         System.out.println();
         System.out.println("══════════════════════════════════════════════════════════════════════════");
         System.out.println("                    DNS MONITORING REPORT  (30 s continuous)");
+        System.out.println("                    A = IPv4 record  |  AAAA = IPv6 record");
         System.out.println("══════════════════════════════════════════════════════════════════════════");
 
-        // Group by domain then tool
-        Map<String, Map<String, List<DnsResult>>> byDomainAndTool = results.stream()
+        // Group by domain, then record type (A / AAAA) for a side-by-side view of each IP version.
+        Map<String, Map<String, List<DnsResult>>> byDomainAndType = results.stream()
             .collect(Collectors.groupingBy(
                 DnsResult::getDomain,
-                Collectors.groupingBy(DnsResult::getTool)
+                Collectors.groupingBy(DnsResult::getRecordType)
             ));
 
-        System.out.printf("  %-25s  %-10s  %7s  %7s  %8s  %8s  %8s%n",
-            "Domain", "Tool", "Rounds", "Success", "Avg(ms)", "Min(ms)", "Max(ms)");
+        System.out.printf("  %-25s  %-6s  %7s  %7s  %8s  %8s  %8s%n",
+            "Domain", "Type", "Rounds", "Success", "Avg(ms)", "Min(ms)", "Max(ms)");
         System.out.println("  " + "─".repeat(80));
 
-        byDomainAndTool.entrySet().stream()
+        byDomainAndType.entrySet().stream()
             .sorted(Map.Entry.comparingByKey())
             .forEach(domainEntry -> {
                 String domain = domainEntry.getKey();
+                // Print A before AAAA for consistent ordering.
                 domainEntry.getValue().entrySet().stream()
                     .sorted(Map.Entry.comparingByKey())
-                    .forEach(toolEntry -> printDnsRow(domain, toolEntry.getKey(), toolEntry.getValue()));
+                    .forEach(typeEntry -> printDnsRow(domain, typeEntry.getKey(), typeEntry.getValue()));
             });
 
         System.out.println();
@@ -202,10 +204,11 @@ public class WebsiteReporter {
      * in the DNS monitoring report.
      *
      * @param domain the fully-qualified domain queried
-     * @param tool   the resolver tool identifier (e.g. {@code "8.8.8.8"})
-     * @param rows   all {@link DnsResult} records for this domain and tool
+     * @param domain     the domain name (e.g. {@code "google.com"})
+     * @param recordType the DNS record type: {@code "A"} (IPv4) or {@code "AAAA"} (IPv6)
+     * @param rows       all {@link DnsResult} records for this domain and record type
      */
-    private void printDnsRow(String domain, String tool, List<DnsResult> rows) {
+    private void printDnsRow(String domain, String recordType, List<DnsResult> rows) {
         List<DnsResult> succeeded = rows.stream().filter(DnsResult::isSuccess).toList();
 
         int total   = rows.size();
@@ -213,13 +216,13 @@ public class WebsiteReporter {
         double pct  = total == 0 ? 0 : (success * 100.0) / total;
 
         if (succeeded.isEmpty()) {
-            // All entries failed — typically means the tool is not installed
+            // All queries failed — typically means no AAAA records exist or IPv6 is blocked.
             String reason = rows.stream()
                 .map(DnsResult::getErrorMessage)
                 .filter(e -> e != null && !e.isBlank())
                 .findFirst().orElse("unknown");
-            System.out.printf("  %-25s  %-10s  %7d  %7s  %-55s%n",
-                domain, tool, total, "0%", "N/A — " + truncate(reason, 50));
+            System.out.printf("  %-25s  %-6s  %7d  %7s  %-55s%n",
+                domain, recordType, total, "0%", "N/A — " + truncate(reason, 50));
             return;
         }
 
@@ -227,8 +230,8 @@ public class WebsiteReporter {
             .mapToLong(DnsResult::getResponseTimeMs)
             .summaryStatistics();
 
-        System.out.printf("  %-25s  %-10s  %7d  %6.0f%%  %8.0f  %8d  %8d%n",
-            domain, tool, total, pct,
+        System.out.printf("  %-25s  %-6s  %7d  %6.0f%%  %8.0f  %8d  %8d%n",
+            domain, recordType, total, pct,
             stats.getAverage(), stats.getMin(), stats.getMax());
     }
 
@@ -263,106 +266,109 @@ public class WebsiteReporter {
         System.out.println("╚══════════════════════════════════════════════════════════════════════════╝");
 
         // ── 1. YouTube Videos ─────────────────────────────────────────────────
-        System.out.println();
-        System.out.println("  ╔══ YOUTUBE VIDEO PERFORMANCE ══════════════════════════════════════════");
-        System.out.println("  ║  Internet checks per video (7 total):");
-        System.out.println("  ║    DNS Lookup ≤ 200 ms  │  TCP RTT ≤ 200 ms  │  TTFB ≤ 3000 ms (cold) / 1200 ms (warm)");
-        System.out.println("  ║    Page Load ≤ 15000 ms (cold) / 12000 ms (warm)  │  Buffer ≥ 10 s  │  Avg BW ≥ 250 KB/s");
-        System.out.println("  ║    Quality Stability: video must not be downgraded by YouTube's ABR during playback");
-        System.out.println("  ╚═══════════════════════════════════════════════════════════════════════");
-        System.out.printf("  %-5s  %-45s  %-18s  %8s  %6s  %s%n",
-            "Tab", "Video Title", "Quality", "Checks", "Status", "Failed checks");
-        System.out.println("  " + "─".repeat(110));
+        // Section is omitted entirely when YouTube was not part of the run.
+        if (ytVerdicts != null) {
+            System.out.println();
+            System.out.println("  ╔══ YOUTUBE VIDEO PERFORMANCE ══════════════════════════════════════════");
+            System.out.println("  ║  Internet checks per video (7 total):");
+            System.out.println("  ║    DNS Lookup ≤ 200 ms  │  TCP RTT ≤ 200 ms  │  TTFB ≤ 3000 ms (cold) / 1500 ms (warm)");
+            System.out.println("  ║    Page Load ≤ 15000 ms (cold) / 12000 ms (warm)  │  Buffer ≥ 10 s  │  Avg BW ≥ 250 KB/s");
+            System.out.println("  ║    Quality Stability: video must not be downgraded by YouTube's ABR during playback");
+            System.out.println("  ╚═══════════════════════════════════════════════════════════════════════");
+            System.out.printf("  %-5s  %-45s  %-18s  %8s  %6s  %s%n",
+                "Tab", "Video Title", "Quality", "Checks", "Status", "Failed checks");
+            System.out.println("  " + "─".repeat(110));
 
-        boolean anyYt = ytVerdicts != null && !ytVerdicts.isEmpty();
-        if (anyYt) {
-            for (VideoVerdict v : ytVerdicts) {
-                String title = v.getMetrics().getPageTitle();
-                if (title == null || title.isBlank()) title = v.getMetrics().getUrl();
-                String failedChecks = v.getChecks().stream()
-                    .filter(c -> !c.isPassed())
-                    .map(c -> c.getCheckName() + ": " + c.getActual() + " (threshold " + c.getExpected() + ")")
-                    .collect(Collectors.joining(", "));
+            boolean anyYt = !ytVerdicts.isEmpty();
+            if (anyYt) {
+                for (VideoVerdict v : ytVerdicts) {
+                    String title = v.getMetrics().getPageTitle();
+                    if (title == null || title.isBlank()) title = v.getMetrics().getUrl();
+                    String failedChecks = v.getChecks().stream()
+                        .filter(c -> !c.isPassed())
+                        .map(c -> c.getCheckName() + ": " + c.getActual() + " (threshold " + c.getExpected() + ")")
+                        .collect(Collectors.joining(", "));
 
-                // Build a concise quality summary for this video:
-                //   "hd1080 (stable)"        — stayed at peak the whole time
-                //   "hd1080 → hd720"         — ABR downgraded at least once
-                //   "N/A"                    — quality was never reported as a specific level
-                VideoMetrics vm = v.getMetrics();
-                String qualitySummary;
-                if (vm.getPeakQualityLabel() != null) {
-                    qualitySummary = vm.isQualityDegraded()
-                        ? vm.getPeakQualityLabel() + " \u2192 " + vm.getLowestQualityLabel()
-                        : vm.getPeakQualityLabel() + " (stable)";
-                } else {
-                    qualitySummary = "N/A (auto)";
+                    VideoMetrics vm = v.getMetrics();
+                    String qualitySummary;
+                    if (vm.getPeakQualityLabel() != null) {
+                        qualitySummary = vm.isQualityDegraded()
+                            ? vm.getPeakQualityLabel() + " \u2192 " + vm.getLowestQualityLabel()
+                            : vm.getPeakQualityLabel() + " (stable)";
+                    } else {
+                        qualitySummary = "N/A (auto)";
+                    }
+
+                    System.out.printf("  %-5d  %-45s  %-18s  %3d / %2d  [%-4s]  %s%n",
+                        vm.getTabIndex(),
+                        truncate(title, 45),
+                        qualitySummary,
+                        v.passCount(), v.getChecks().size(),
+                        v.isPassed() ? "PASS" : "FAIL",
+                        failedChecks);
                 }
-
-                System.out.printf("  %-5d  %-45s  %-18s  %3d / %2d  [%-4s]  %s%n",
-                    vm.getTabIndex(),
-                    truncate(title, 45),
-                    qualitySummary,
-                    v.passCount(), v.getChecks().size(),
-                    v.isPassed() ? "PASS" : "FAIL",
-                    failedChecks);
+            } else {
+                System.out.println("  No YouTube results.");
             }
-        } else {
-            System.out.println("  No YouTube results.");
         }
 
         // ── 2. Website Performance ────────────────────────────────────────────
-        System.out.println();
-        System.out.println("  ╔══ WEBSITE PERFORMANCE ════════════════════════════════════════════════");
-        System.out.printf("  ║  Thresholds — warm (cycles 2+): Page Load ≤ %d ms │ TTFB ≤ %d ms%n",
-            THRESHOLD_PAGE_LOAD_MS, THRESHOLD_TTFB_MS);
-        System.out.printf("  ║  Thresholds — cold (cycle 1):   Page Load ≤ %d ms │ TTFB ≤ %d ms  (no cache, new TCP+TLS)%n",
-            THRESHOLD_PAGE_LOAD_COLD_MS, THRESHOLD_TTFB_COLD_MS);
-        System.out.println("  ╚═══════════════════════════════════════════════════════════════════════");
-        System.out.printf("  %-22s  %5s  %12s  %10s  %10s  %-8s  %s%n",
-            "Domain", "Cycle", "Page Load", "TTFB", "DCL", "Status", "Reason");
-        System.out.println("  " + "─".repeat(95));
-
+        // Section is omitted entirely when Website was not part of the run.
         boolean anyWebResults = webMetrics != null && !webMetrics.isEmpty();
-        if (anyWebResults) {
-            webMetrics.stream()
-                .collect(Collectors.groupingBy(WebsiteMetrics::getDomain))
-                .entrySet().stream()
-                .sorted(Map.Entry.comparingByKey())
-                .forEach(e -> printWebsiteCycleRows(e.getKey(), e.getValue()));
-        } else {
-            System.out.println("  No website results.");
+        if (webMetrics != null) {
+            System.out.println();
+            System.out.println("  ╔══ WEBSITE PERFORMANCE ════════════════════════════════════════════════");
+            System.out.printf("  ║  Thresholds — warm (cycles 2+): Page Load ≤ %d ms │ TTFB ≤ %d ms%n",
+                THRESHOLD_PAGE_LOAD_MS, THRESHOLD_TTFB_MS);
+            System.out.printf("  ║  Thresholds — cold (cycle 1):   Page Load ≤ %d ms │ TTFB ≤ %d ms  (no cache, new TCP+TLS)%n",
+                THRESHOLD_PAGE_LOAD_COLD_MS, THRESHOLD_TTFB_COLD_MS);
+            System.out.println("  ╚═══════════════════════════════════════════════════════════════════════");
+            System.out.printf("  %-22s  %5s  %12s  %10s  %10s  %-8s  %s%n",
+                "Domain", "Cycle", "Page Load", "TTFB", "DCL", "Status", "Reason");
+            System.out.println("  " + "─".repeat(95));
+
+            if (anyWebResults) {
+                webMetrics.stream()
+                    .collect(Collectors.groupingBy(WebsiteMetrics::getDomain))
+                    .entrySet().stream()
+                    .sorted(Map.Entry.comparingByKey())
+                    .forEach(e -> printWebsiteCycleRows(e.getKey(), e.getValue()));
+            } else {
+                System.out.println("  No website results.");
+            }
         }
 
         // ── 3. DNS Monitoring ─────────────────────────────────────────────────
-        System.out.println();
-        System.out.println("  ╔══ DNS MONITORING ══════════════════════════════════════════════════════");
-        System.out.println("  ║  PASS = direct UDP query to 8.8.8.8 (Google DNS) resolved successfully \u2014 real internet connectivity confirmed.");
-        System.out.println("  ║  FAIL = query timed out or returned an error \u2014 DNS/internet broken at time of query.");
-        System.out.println("  ║  Times are true round-trip latency to 8.8.8.8: 10\u2013100 ms = healthy, >500 ms = congested, timeout = down.");
-        System.out.println("  ╚═══════════════════════════════════════════════════════════════════════");
-        System.out.printf("  %-20s  %-24s  %6s  %10s  %-8s  %s%n",
-            "Domain", "Tool", "Round", "Time(ms)", "Status", "Reason");
-        System.out.println("  " + "─".repeat(90));
-
+        // Section is omitted entirely when DNS was not part of the run.
         boolean anyDnsResults = dnsResults != null && !dnsResults.isEmpty();
-        if (anyDnsResults) {
-            // Group by domain+tool to keep entries together, then print each query row
-            dnsResults.stream()
-                .collect(Collectors.groupingBy(r -> r.getDomain() + "||" + r.getTool()))
-                .entrySet().stream()
-                .sorted(Map.Entry.comparingByKey())
-                .forEach(e -> {
-                    String[] parts = e.getKey().split("\\|\\|");
-                    printDnsQueryRows(parts[0], parts[1], e.getValue());
-                });
-        } else {
-            System.out.println("  No DNS results.");
+        if (dnsResults != null) {
+            System.out.println();
+            System.out.println("  ╔══ DNS MONITORING ══════════════════════════════════════════════════════");
+            System.out.println("  ║  PASS = direct UDP query to 8.8.8.8 (Google DNS) resolved successfully \u2014 real internet connectivity confirmed.");
+            System.out.println("  ║  FAIL = query timed out or returned an error \u2014 DNS/internet broken at time of query.");
+            System.out.println("  ║  Times are true round-trip latency to 8.8.8.8: 10\u2013100 ms = healthy, >500 ms = congested, timeout = down.");
+            System.out.println("  ╚═══════════════════════════════════════════════════════════════════════");
+            System.out.printf("  %-20s  %-24s  %6s  %10s  %-8s  %s%n",
+                "Domain", "Type", "Round", "Time(ms)", "Status", "Reason");
+            System.out.println("  " + "─".repeat(90));
+
+            if (anyDnsResults) {
+                dnsResults.stream()
+                    .collect(Collectors.groupingBy(r -> r.getDomain() + "||" + r.getRecordType()))
+                    .entrySet().stream()
+                    .sorted(Map.Entry.comparingByKey())
+                    .forEach(e -> {
+                        String[] parts = e.getKey().split("\\|\\|");
+                        printDnsQueryRows(parts[0], parts[1], e.getValue());
+                    });
+            } else {
+                System.out.println("  No DNS results.");
+            }
         }
 
         // ── 4. Overall verdict ────────────────────────────────────────────────
-        // ytVerdicts == null  → YouTube was not attempted at all  → N/A
-        // ytVerdicts is empty → YouTube was attempted but crashed → FAIL (0/0)
-        // ytVerdicts non-empty → normal evaluation
+        // null list  → probe was not part of this run → omit its row from the summary
+        // empty list → probe ran but produced no results (crash/setup failure) → FAIL
         boolean ytAttempted  = ytVerdicts != null;
         boolean anyYtResults = ytAttempted && !ytVerdicts.isEmpty();
         boolean allYtPass    = anyYtResults && ytVerdicts.stream().allMatch(VideoVerdict::isPassed);
@@ -372,22 +378,29 @@ public class WebsiteReporter {
             .collect(Collectors.groupingBy(WebsiteMetrics::getDomain))
             .values().stream().allMatch(this::websiteDomainPasses);
         boolean allDnsPass = anyDnsResults && dnsResults.stream()
-            .collect(Collectors.groupingBy(r -> r.getDomain() + "||" + r.getTool()))
+            .collect(Collectors.groupingBy(r -> r.getDomain() + "||" + r.getRecordType()))
             .values().stream().allMatch(this::dnsDomainToolPasses);
 
         System.out.println();
         System.out.println("  ╔══ OVERALL RESULT ══════════════════════════════════════════════════════");
-        System.out.printf("  ║  %-50s  [%s]%s%n",
-            "YouTube Performance ("+ytPass+"/"+ytTotal+" videos passed)",
-            !ytAttempted ? "N/A" : allYtPass ? "PASS" : "FAIL",
-            "");
-        System.out.printf("  ║  %-50s  [%s]%n", "Website Performance",
-            !anyWebResults ? "N/A" : allWebPass ? "PASS" : "FAIL");
-        System.out.printf("  ║  %-50s  [%s]%n", "DNS Monitoring",
-            !anyDnsResults ? "N/A" : allDnsPass ? "PASS" : "FAIL");
-        // Overall passes only if every attempted probe passed; a probe that was
-        // attempted but produced no results (empty list) counts as a failure.
-        boolean overallPass = (!ytAttempted || allYtPass) && (!anyWebResults || allWebPass) && (!anyDnsResults || allDnsPass);
+        // Only print a row for probes that were part of this run.
+        if (ytAttempted) {
+            System.out.printf("  ║  %-50s  [%s]%n",
+                "YouTube Performance (" + ytPass + "/" + ytTotal + " videos passed)",
+                allYtPass ? "PASS" : "FAIL");
+        }
+        if (webMetrics != null) {
+            System.out.printf("  ║  %-50s  [%s]%n", "Website Performance",
+                anyWebResults && allWebPass ? "PASS" : "FAIL");
+        }
+        if (dnsResults != null) {
+            System.out.printf("  ║  %-50s  [%s]%n", "DNS Monitoring",
+                anyDnsResults && allDnsPass ? "PASS" : "FAIL");
+        }
+        // Overall passes only if every attempted probe passed.
+        boolean overallPass = (!ytAttempted || allYtPass)
+            && (webMetrics  == null || (anyWebResults && allWebPass))
+            && (dnsResults  == null || (anyDnsResults && allDnsPass));
         System.out.println("  ╠══════════════════════════════════════════════════════════════════════");
         System.out.printf("  ║  %-50s  [%s]%n", "TEST SUITE RESULT",
             (!ytAttempted && !anyWebResults && !anyDnsResults) ? "N/A" : overallPass ? "PASS" : "FAIL");
@@ -422,7 +435,7 @@ public class WebsiteReporter {
      * Prints one row per individual DNS query result.
      * PASS if the query succeeded and response time is within the threshold.
      */
-    private void printDnsQueryRows(String domain, String tool, List<DnsResult> rows) {
+    private void printDnsQueryRows(String domain, String recordType, List<DnsResult> rows) {
         List<DnsResult> sorted = rows.stream()
             .sorted(java.util.Comparator.comparingLong(DnsResult::getTimestamp)).toList();
         int round = 0;
@@ -435,7 +448,7 @@ public class WebsiteReporter {
             String reason = r.isSuccess() ? "" :
                 (r.getErrorMessage() != null ? truncate(r.getErrorMessage(), 50) : "resolution failed");
             System.out.printf("  %-20s  %-24s  %6d  %8s  %-8s  %s%n",
-                domain, tool, round,
+                domain, recordType, round,
                 r.getResponseTimeMs() + " ms",
                 status, reason);
         }

@@ -1,0 +1,696 @@
+[main] INFO com.youtube.perf.TestConfig - Loaded 2 YouTube URL(s), 4 website URL(s), 5 DNS domain(s); duration=30s; mode=[website]; report=15s
+ΓòöΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòù
+Γòæ         YouTube + Website Performance Tester          Γòæ
+ΓòÜΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓò¥
+[main] INFO com.youtube.perf.Main - Launching probes in parallel (mode=website)...
+Mode         : website
+Duration     : 30 s
+Website tabs : 4  (refresh every 5 s for 30 s)
+Report every : 15 s
+
+[pool-1-thread-1] INFO io.github.bonigarcia.wdm.WebDriverManager - Using chromedriver 147.0.7727.117 (resolved driver for Chrome 147)
+[pool-1-thread-1] INFO io.github.bonigarcia.wdm.WebDriverManager - Exporting webdriver.chrome.driver as C:\Users\kpandi699\.cache\selenium\chromedriver\win64\147.0.7727.117\chromedriver.exe
+May 04, 2026 2:57:31 PM org.openqa.selenium.devtools.CdpVersionFinder findNearestMatch
+WARNING: Unable to find CDP implementation matching 147
+May 04, 2026 2:57:31 PM org.openqa.selenium.chromium.ChromiumDriver lambda$new$5
+WARNING: Unable to find version of CDP to use for 147.0.7727.117. You may need to include a dependency on a specific version of the CDP using something similar to `org.seleniumhq.selenium:selenium-devtools-v86:4.20.0` where the version ("v86") matches the version of the chromium-based browser you're using and the version number of the artifact is the same as Selenium's.
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester - [WebsiteTester] Opened tab 1: https://www.craigslist.org
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester - [WebsiteTester] Opened tab 2: https://www.wikipedia.org
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester - [WebsiteTester] Opened tab 3: https://www.facebook.com
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester - [WebsiteTester] Opened tab 4: https://www.amazon.com
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester - [WebsiteTester] Tabs ready ΓÇö waiting for all probes to sync...
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester - [WebsiteTester] All probes ready ΓÇö starting 30-second measurement window
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester - [WebsiteTester] ΓöÇΓöÇ Cycle 1/6 ΓöÇΓöÇ
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-1] craigslist.org | pageLoad=655ms TTFB=53ms DCL=107ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-2] wikipedia.org | pageLoad=212ms TTFB=42ms DCL=200ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-3] facebook.com | pageLoad=683ms TTFB=184ms DCL=503ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-4] amazon.com | pageLoad=1709ms TTFB=251ms DCL=910ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester - [WebsiteTester] ΓöÇΓöÇ Cycle 2/6 ΓöÇΓöÇ
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-1] craigslist.org | pageLoad=331ms TTFB=126ms DCL=143ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-2] wikipedia.org | pageLoad=237ms TTFB=103ms DCL=164ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-3] facebook.com | pageLoad=351ms TTFB=135ms DCL=311ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-4] amazon.com | pageLoad=2683ms TTFB=198ms DCL=689ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester - [WebsiteTester] ΓöÇΓöÇ Cycle 3/6 ΓöÇΓöÇ
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-1] craigslist.org | pageLoad=466ms TTFB=63ms DCL=112ms
+
+--- Snapshot #1 ---
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-2] wikipedia.org | pageLoad=271ms TTFB=86ms DCL=136ms
+{
+  "timestamp" : "2026-05-04T14:57:59",
+  "type" : "snapshot",
+  "snapshotNumber" : 1,
+  "mode" : "website",
+  "duration_seconds" : 30,
+  "website" : [ {
+    "tab" : 1,
+    "url" : "https://www.craigslist.org",
+    "domain" : "craigslist.org",
+    "cycles" : [ {
+      "cycle" : 1,
+      "timestamp" : "2026-05-04T14:57:44",
+      "success" : true,
+      "pageLoad_ms" : 655,
+      "ttfb_ms" : 53,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 107
+    }, {
+      "cycle" : 2,
+      "timestamp" : "2026-05-04T14:57:51",
+      "success" : true,
+      "pageLoad_ms" : 331,
+      "ttfb_ms" : 126,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 143
+    }, {
+      "cycle" : 3,
+      "timestamp" : "2026-05-04T14:57:57",
+      "success" : true,
+      "pageLoad_ms" : 466,
+      "ttfb_ms" : 63,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 112
+    } ],
+    "successCycles" : 3,
+    "totalCycles" : 3,
+    "avgPageLoad_ms" : 484,
+    "avgTtfb_ms" : 80
+  }, {
+    "tab" : 2,
+    "url" : "https://www.wikipedia.org",
+    "domain" : "wikipedia.org",
+    "cycles" : [ {
+      "cycle" : 1,
+      "timestamp" : "2026-05-04T14:57:45",
+      "success" : true,
+      "pageLoad_ms" : 212,
+      "ttfb_ms" : 42,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 200
+    }, {
+      "cycle" : 2,
+      "timestamp" : "2026-05-04T14:57:51",
+      "success" : true,
+      "pageLoad_ms" : 237,
+      "ttfb_ms" : 103,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 164
+    } ],
+    "successCycles" : 2,
+    "totalCycles" : 2,
+    "avgPageLoad_ms" : 224,
+    "avgTtfb_ms" : 72
+  }, {
+    "tab" : 3,
+    "url" : "https://www.facebook.com",
+    "domain" : "facebook.com",
+    "cycles" : [ {
+      "cycle" : 1,
+      "timestamp" : "2026-05-04T14:57:45",
+      "success" : true,
+      "pageLoad_ms" : 683,
+      "ttfb_ms" : 184,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 503
+    }, {
+      "cycle" : 2,
+      "timestamp" : "2026-05-04T14:57:52",
+      "success" : true,
+      "pageLoad_ms" : 351,
+      "ttfb_ms" : 135,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 311
+    } ],
+    "successCycles" : 2,
+    "totalCycles" : 2,
+    "avgPageLoad_ms" : 517,
+    "avgTtfb_ms" : 159
+  }, {
+    "tab" : 4,
+    "url" : "https://www.amazon.com",
+    "domain" : "amazon.com",
+    "cycles" : [ {
+      "cycle" : 1,
+      "timestamp" : "2026-05-04T14:57:47",
+      "success" : true,
+      "pageLoad_ms" : 1709,
+      "ttfb_ms" : 251,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 910
+    }, {
+      "cycle" : 2,
+      "timestamp" : "2026-05-04T14:57:53",
+      "success" : true,
+      "pageLoad_ms" : 2683,
+      "ttfb_ms" : 198,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 689
+    } ],
+    "successCycles" : 2,
+    "totalCycles" : 2,
+    "avgPageLoad_ms" : 2196,
+    "avgTtfb_ms" : 224
+  } ]
+}
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-3] facebook.com | pageLoad=416ms TTFB=177ms DCL=367ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-4] amazon.com | pageLoad=1497ms TTFB=263ms DCL=1038ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester - [WebsiteTester] ΓöÇΓöÇ Cycle 4/6 ΓöÇΓöÇ
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-1] craigslist.org | pageLoad=335ms TTFB=59ms DCL=87ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-2] wikipedia.org | pageLoad=149ms TTFB=40ms DCL=143ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-3] facebook.com | pageLoad=363ms TTFB=147ms DCL=323ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-4] amazon.com | pageLoad=1239ms TTFB=338ms DCL=917ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester - [WebsiteTester] ΓöÇΓöÇ Cycle 5/6 ΓöÇΓöÇ
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-1] craigslist.org | pageLoad=269ms TTFB=61ms DCL=84ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-2] wikipedia.org | pageLoad=116ms TTFB=42ms DCL=65ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-3] facebook.com | pageLoad=465ms TTFB=231ms DCL=410ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-4] amazon.com | pageLoad=1561ms TTFB=188ms DCL=794ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester - [WebsiteTester] ΓöÇΓöÇ Cycle 6/6 ΓöÇΓöÇ
+
+--- Snapshot #2 ---
+{
+  "timestamp" : "2026-05-04T14:58:14",
+  "type" : "snapshot",
+  "snapshotNumber" : 2,
+  "mode" : "website",
+  "duration_seconds" : 30,
+  "website" : [ {
+    "tab" : 1,
+    "url" : "https://www.craigslist.org",
+    "domain" : "craigslist.org",
+    "cycles" : [ {
+      "cycle" : 4,
+      "timestamp" : "2026-05-04T14:58:04",
+      "success" : true,
+      "pageLoad_ms" : 335,
+      "ttfb_ms" : 59,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 87
+    }, {
+      "cycle" : 5,
+      "timestamp" : "2026-05-04T14:58:09",
+      "success" : true,
+      "pageLoad_ms" : 269,
+      "ttfb_ms" : 61,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 84
+    } ],
+    "successCycles" : 2,
+    "totalCycles" : 2,
+    "avgPageLoad_ms" : 302,
+    "avgTtfb_ms" : 60
+  }, {
+    "tab" : 2,
+    "url" : "https://www.wikipedia.org",
+    "domain" : "wikipedia.org",
+    "cycles" : [ {
+      "cycle" : 4,
+      "timestamp" : "2026-05-04T14:58:04",
+      "success" : true,
+      "pageLoad_ms" : 149,
+      "ttfb_ms" : 40,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 143
+    }, {
+      "cycle" : 5,
+      "timestamp" : "2026-05-04T14:58:09",
+      "success" : true,
+      "pageLoad_ms" : 116,
+      "ttfb_ms" : 42,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 65
+    } ],
+    "successCycles" : 2,
+    "totalCycles" : 2,
+    "avgPageLoad_ms" : 132,
+    "avgTtfb_ms" : 41
+  }, {
+    "tab" : 3,
+    "url" : "https://www.facebook.com",
+    "domain" : "facebook.com",
+    "cycles" : [ {
+      "cycle" : 4,
+      "timestamp" : "2026-05-04T14:58:05",
+      "success" : true,
+      "pageLoad_ms" : 363,
+      "ttfb_ms" : 147,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 323
+    }, {
+      "cycle" : 5,
+      "timestamp" : "2026-05-04T14:58:10",
+      "success" : true,
+      "pageLoad_ms" : 465,
+      "ttfb_ms" : 231,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 410
+    } ],
+    "successCycles" : 2,
+    "totalCycles" : 2,
+    "avgPageLoad_ms" : 414,
+    "avgTtfb_ms" : 189
+  }, {
+    "tab" : 4,
+    "url" : "https://www.amazon.com",
+    "domain" : "amazon.com",
+    "cycles" : [ {
+      "cycle" : 3,
+      "timestamp" : "2026-05-04T14:58:01",
+      "success" : true,
+      "pageLoad_ms" : 1497,
+      "ttfb_ms" : 263,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 1038
+    }, {
+      "cycle" : 4,
+      "timestamp" : "2026-05-04T14:58:06",
+      "success" : true,
+      "pageLoad_ms" : 1239,
+      "ttfb_ms" : 338,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 917
+    }, {
+      "cycle" : 5,
+      "timestamp" : "2026-05-04T14:58:10",
+      "success" : true,
+      "pageLoad_ms" : 1561,
+      "ttfb_ms" : 188,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 794
+    } ],
+    "successCycles" : 3,
+    "totalCycles" : 3,
+    "avgPageLoad_ms" : 1432,
+    "avgTtfb_ms" : 263
+  } ]
+}
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-1] craigslist.org | pageLoad=217ms TTFB=53ms DCL=70ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-2] wikipedia.org | pageLoad=108ms TTFB=34ms DCL=60ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-3] facebook.com | pageLoad=386ms TTFB=149ms DCL=338ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester -   [Site-4] amazon.com | pageLoad=1386ms TTFB=175ms DCL=584ms
+[pool-1-thread-1] INFO com.youtube.perf.WebsiteTester - [WebsiteTester] Browser closed.
+
+--- FINAL ---
+{
+  "timestamp" : "2026-05-04T14:58:20",
+  "type" : "final",
+  "mode" : "website",
+  "duration_seconds" : 30,
+  "website" : [ {
+    "tab" : 1,
+    "url" : "https://www.craigslist.org",
+    "domain" : "craigslist.org",
+    "cycles" : [ {
+      "cycle" : 1,
+      "timestamp" : "2026-05-04T14:57:44",
+      "success" : true,
+      "pageLoad_ms" : 655,
+      "ttfb_ms" : 53,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 107
+    }, {
+      "cycle" : 2,
+      "timestamp" : "2026-05-04T14:57:51",
+      "success" : true,
+      "pageLoad_ms" : 331,
+      "ttfb_ms" : 126,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 143
+    }, {
+      "cycle" : 3,
+      "timestamp" : "2026-05-04T14:57:57",
+      "success" : true,
+      "pageLoad_ms" : 466,
+      "ttfb_ms" : 63,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 112
+    }, {
+      "cycle" : 4,
+      "timestamp" : "2026-05-04T14:58:04",
+      "success" : true,
+      "pageLoad_ms" : 335,
+      "ttfb_ms" : 59,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 87
+    }, {
+      "cycle" : 5,
+      "timestamp" : "2026-05-04T14:58:09",
+      "success" : true,
+      "pageLoad_ms" : 269,
+      "ttfb_ms" : 61,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 84
+    }, {
+      "cycle" : 6,
+      "timestamp" : "2026-05-04T14:58:14",
+      "success" : true,
+      "pageLoad_ms" : 217,
+      "ttfb_ms" : 53,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 70
+    } ],
+    "successCycles" : 6,
+    "totalCycles" : 6,
+    "avgPageLoad_ms" : 378,
+    "avgTtfb_ms" : 69
+  }, {
+    "tab" : 2,
+    "url" : "https://www.wikipedia.org",
+    "domain" : "wikipedia.org",
+    "cycles" : [ {
+      "cycle" : 1,
+      "timestamp" : "2026-05-04T14:57:45",
+      "success" : true,
+      "pageLoad_ms" : 212,
+      "ttfb_ms" : 42,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 200
+    }, {
+      "cycle" : 2,
+      "timestamp" : "2026-05-04T14:57:51",
+      "success" : true,
+      "pageLoad_ms" : 237,
+      "ttfb_ms" : 103,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 164
+    }, {
+      "cycle" : 3,
+      "timestamp" : "2026-05-04T14:57:58",
+      "success" : true,
+      "pageLoad_ms" : 271,
+      "ttfb_ms" : 86,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 136
+    }, {
+      "cycle" : 4,
+      "timestamp" : "2026-05-04T14:58:04",
+      "success" : true,
+      "pageLoad_ms" : 149,
+      "ttfb_ms" : 40,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 143
+    }, {
+      "cycle" : 5,
+      "timestamp" : "2026-05-04T14:58:09",
+      "success" : true,
+      "pageLoad_ms" : 116,
+      "ttfb_ms" : 42,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 65
+    }, {
+      "cycle" : 6,
+      "timestamp" : "2026-05-04T14:58:14",
+      "success" : true,
+      "pageLoad_ms" : 108,
+      "ttfb_ms" : 34,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 60
+    } ],
+    "successCycles" : 6,
+    "totalCycles" : 6,
+    "avgPageLoad_ms" : 182,
+    "avgTtfb_ms" : 57
+  }, {
+    "tab" : 3,
+    "url" : "https://www.facebook.com",
+    "domain" : "facebook.com",
+    "cycles" : [ {
+      "cycle" : 1,
+      "timestamp" : "2026-05-04T14:57:45",
+      "success" : true,
+      "pageLoad_ms" : 683,
+      "ttfb_ms" : 184,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 503
+    }, {
+      "cycle" : 2,
+      "timestamp" : "2026-05-04T14:57:52",
+      "success" : true,
+      "pageLoad_ms" : 351,
+      "ttfb_ms" : 135,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 311
+    }, {
+      "cycle" : 3,
+      "timestamp" : "2026-05-04T14:57:59",
+      "success" : true,
+      "pageLoad_ms" : 416,
+      "ttfb_ms" : 177,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 367
+    }, {
+      "cycle" : 4,
+      "timestamp" : "2026-05-04T14:58:05",
+      "success" : true,
+      "pageLoad_ms" : 363,
+      "ttfb_ms" : 147,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 323
+    }, {
+      "cycle" : 5,
+      "timestamp" : "2026-05-04T14:58:10",
+      "success" : true,
+      "pageLoad_ms" : 465,
+      "ttfb_ms" : 231,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 410
+    }, {
+      "cycle" : 6,
+      "timestamp" : "2026-05-04T14:58:14",
+      "success" : true,
+      "pageLoad_ms" : 386,
+      "ttfb_ms" : 149,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 338
+    } ],
+    "successCycles" : 6,
+    "totalCycles" : 6,
+    "avgPageLoad_ms" : 444,
+    "avgTtfb_ms" : 170
+  }, {
+    "tab" : 4,
+    "url" : "https://www.amazon.com",
+    "domain" : "amazon.com",
+    "cycles" : [ {
+      "cycle" : 1,
+      "timestamp" : "2026-05-04T14:57:47",
+      "success" : true,
+      "pageLoad_ms" : 1709,
+      "ttfb_ms" : 251,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 910
+    }, {
+      "cycle" : 2,
+      "timestamp" : "2026-05-04T14:57:53",
+      "success" : true,
+      "pageLoad_ms" : 2683,
+      "ttfb_ms" : 198,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 689
+    }, {
+      "cycle" : 3,
+      "timestamp" : "2026-05-04T14:58:01",
+      "success" : true,
+      "pageLoad_ms" : 1497,
+      "ttfb_ms" : 263,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 1038
+    }, {
+      "cycle" : 4,
+      "timestamp" : "2026-05-04T14:58:06",
+      "success" : true,
+      "pageLoad_ms" : 1239,
+      "ttfb_ms" : 338,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 917
+    }, {
+      "cycle" : 5,
+      "timestamp" : "2026-05-04T14:58:10",
+      "success" : true,
+      "pageLoad_ms" : 1561,
+      "ttfb_ms" : 188,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 794
+    }, {
+      "cycle" : 6,
+      "timestamp" : "2026-05-04T14:58:15",
+      "success" : true,
+      "pageLoad_ms" : 1386,
+      "ttfb_ms" : 175,
+      "dnsLookup_ms" : 0,
+      "tcpConnection_ms" : 0,
+      "domContentLoaded_ms" : 584
+    } ],
+    "successCycles" : 6,
+    "totalCycles" : 6,
+    "avgPageLoad_ms" : 1679,
+    "avgTtfb_ms" : 235
+  } ]
+}
+
+ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+                    WEBSITE PERFORMANCE REPORT  (6 refresh cycles ├ù 5 s)
+ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+
+  [ Tab 1 ] craigslist.org  ΓÇö  craigslist: new york jobs, apartments, for sale...
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  Cycle   Page Load       TTFB          DCL           DNS Lookup    TCP Connect 
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  1       655 ms Γ£ô      53 ms Γ£ô       107 ms Γ£ô      0 ms Γ£ô        0 ms        
+  2       331 ms Γ£ô      126 ms Γ£ô      143 ms Γ£ô      0 ms Γ£ô        0 ms        
+  3       466 ms Γ£ô      63 ms Γ£ô       112 ms Γ£ô      0 ms Γ£ô        0 ms        
+  4       335 ms Γ£ô      59 ms Γ£ô       87 ms Γ£ô       0 ms Γ£ô        0 ms        
+  5       269 ms Γ£ô      61 ms Γ£ô       84 ms Γ£ô       0 ms Γ£ô        0 ms        
+  6       217 ms Γ£ô      53 ms Γ£ô       70 ms Γ£ô       0 ms Γ£ô        0 ms        
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  AVG     378 ms          69 ms         100 ms        0 ms          0 ms        
+
+
+  [ Tab 2 ] wikipedia.org  ΓÇö  Wikipedia
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  Cycle   Page Load       TTFB          DCL           DNS Lookup    TCP Connect 
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  1       212 ms Γ£ô      42 ms Γ£ô       200 ms Γ£ô      0 ms Γ£ô        0 ms        
+  2       237 ms Γ£ô      103 ms Γ£ô      164 ms Γ£ô      0 ms Γ£ô        0 ms        
+  3       271 ms Γ£ô      86 ms Γ£ô       136 ms Γ£ô      0 ms Γ£ô        0 ms        
+  4       149 ms Γ£ô      40 ms Γ£ô       143 ms Γ£ô      0 ms Γ£ô        0 ms        
+  5       116 ms Γ£ô      42 ms Γ£ô       65 ms Γ£ô       0 ms Γ£ô        0 ms        
+  6       108 ms Γ£ô      34 ms Γ£ô       60 ms Γ£ô       0 ms Γ£ô        0 ms        
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  AVG     182 ms          57 ms         128 ms        0 ms          0 ms        
+
+
+  [ Tab 3 ] facebook.com  ΓÇö  Facebook
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  Cycle   Page Load       TTFB          DCL           DNS Lookup    TCP Connect 
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  1       683 ms Γ£ô      184 ms Γ£ô      503 ms Γ£ô      0 ms Γ£ô        0 ms        
+  2       351 ms Γ£ô      135 ms Γ£ô      311 ms Γ£ô      0 ms Γ£ô        0 ms        
+  3       416 ms Γ£ô      177 ms Γ£ô      367 ms Γ£ô      0 ms Γ£ô        0 ms        
+  4       363 ms Γ£ô      147 ms Γ£ô      323 ms Γ£ô      0 ms Γ£ô        0 ms        
+  5       465 ms Γ£ô      231 ms Γ£ô      410 ms Γ£ô      0 ms Γ£ô        0 ms        
+  6       386 ms Γ£ô      149 ms Γ£ô      338 ms Γ£ô      0 ms Γ£ô        0 ms        
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  AVG     444 ms          170 ms        375 ms        0 ms          0 ms        
+
+
+  [ Tab 4 ] amazon.com  ΓÇö  Amazon.com. Spend less. Smile more.
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  Cycle   Page Load       TTFB          DCL           DNS Lookup    TCP Connect 
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  1       1709 ms Γ£ô     251 ms Γ£ô      910 ms Γ£ô      0 ms Γ£ô        0 ms        
+  2       2683 ms Γ£ô     198 ms Γ£ô      689 ms Γ£ô      0 ms Γ£ô        0 ms        
+  3       1497 ms Γ£ô     263 ms Γ£ô      1038 ms Γ£ô     0 ms Γ£ô        0 ms        
+  4       1239 ms Γ£ô     338 ms Γ£ô      917 ms Γ£ô      0 ms Γ£ô        0 ms        
+  5       1561 ms Γ£ô     188 ms Γ£ô      794 ms Γ£ô      0 ms Γ£ô        0 ms        
+  6       1386 ms Γ£ô     175 ms Γ£ô      584 ms Γ£ô      0 ms Γ£ô        0 ms        
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  AVG     1679 ms         235 ms        822 ms        0 ms          0 ms        
+
+
+ΓòöΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòù
+Γòæ                          COMBINED FINAL REPORT                           Γòæ
+ΓòÜΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓò¥
+
+  ΓòöΓòÉΓòÉ YOUTUBE VIDEO PERFORMANCE ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+  Γòæ  Internet checks per video (7 total):
+  Γòæ    DNS Lookup Γëñ 200 ms  Γöé  TCP RTT Γëñ 200 ms  Γöé  TTFB Γëñ 3000 ms (cold) / 1200 ms (warm)
+  Γòæ    Page Load Γëñ 15000 ms (cold) / 12000 ms (warm)  Γöé  Buffer ΓëÑ 10 s  Γöé  Avg BW ΓëÑ 250 KB/s
+  Γòæ    Quality Stability: video must not be downgraded by YouTube's ABR during playback
+  ΓòÜΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+  Tab    Video Title                                    Quality               Checks  Status  Failed checks
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  No YouTube results.
+
+  ΓòöΓòÉΓòÉ WEBSITE PERFORMANCE ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+  Γòæ  Thresholds ΓÇö warm (cycles 2+): Page Load Γëñ 5000 ms Γöé TTFB Γëñ 1200 ms
+  Γòæ  Thresholds ΓÇö cold (cycle 1):   Page Load Γëñ 8000 ms Γöé TTFB Γëñ 2000 ms  (no cache, new TCP+TLS)
+  ΓòÜΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+  Domain                  Cycle     Page Load        TTFB         DCL  Status    Reason
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  amazon.com                  1     1709 ms    251 ms    910 ms  [PASS]    cold start (TTFB Γëñ 2000 ms, load Γëñ 8000 ms)
+  amazon.com                  2     2683 ms    198 ms    689 ms  [PASS]    
+  amazon.com                  3     1497 ms    263 ms   1038 ms  [PASS]    
+  amazon.com                  4     1239 ms    338 ms    917 ms  [PASS]    
+  amazon.com                  5     1561 ms    188 ms    794 ms  [PASS]    
+  amazon.com                  6     1386 ms    175 ms    584 ms  [PASS]    
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  craigslist.org              1      655 ms     53 ms    107 ms  [PASS]    cold start (TTFB Γëñ 2000 ms, load Γëñ 8000 ms)
+  craigslist.org              2      331 ms    126 ms    143 ms  [PASS]    
+  craigslist.org              3      466 ms     63 ms    112 ms  [PASS]    
+  craigslist.org              4      335 ms     59 ms     87 ms  [PASS]    
+  craigslist.org              5      269 ms     61 ms     84 ms  [PASS]    
+  craigslist.org              6      217 ms     53 ms     70 ms  [PASS]    
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  facebook.com                1      683 ms    184 ms    503 ms  [PASS]    cold start (TTFB Γëñ 2000 ms, load Γëñ 8000 ms)
+  facebook.com                2      351 ms    135 ms    311 ms  [PASS]    
+  facebook.com                3      416 ms    177 ms    367 ms  [PASS]    
+  facebook.com                4      363 ms    147 ms    323 ms  [PASS]    
+  facebook.com                5      465 ms    231 ms    410 ms  [PASS]    
+  facebook.com                6      386 ms    149 ms    338 ms  [PASS]    
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  wikipedia.org               1      212 ms     42 ms    200 ms  [PASS]    cold start (TTFB Γëñ 2000 ms, load Γëñ 8000 ms)
+  wikipedia.org               2      237 ms    103 ms    164 ms  [PASS]    
+  wikipedia.org               3      271 ms     86 ms    136 ms  [PASS]    
+  wikipedia.org               4      149 ms     40 ms    143 ms  [PASS]    
+  wikipedia.org               5      116 ms     42 ms     65 ms  [PASS]    
+  wikipedia.org               6      108 ms     34 ms     60 ms  [PASS]    
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+
+  ΓòöΓòÉΓòÉ DNS MONITORING ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+  Γòæ  PASS = direct UDP query to 8.8.8.8 (Google DNS) resolved successfully ΓÇö real internet connectivity confirmed.
+  Γòæ  FAIL = query timed out or returned an error ΓÇö DNS/internet broken at time of query.
+  Γòæ  Times are true round-trip latency to 8.8.8.8: 10ΓÇô100 ms = healthy, >500 ms = congested, timeout = down.
+  ΓòÜΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+  Domain                Tool                       Round    Time(ms)  Status    Reason
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  No DNS results.
+
+  ΓòöΓòÉΓòÉ OVERALL RESULT ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+  Γòæ  YouTube Performance (0/0 videos passed)             [N/A]
+  Γòæ  Website Performance                                 [PASS]
+  Γòæ  DNS Monitoring                                      [N/A]
+  ΓòáΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+  Γòæ  TEST SUITE RESULT                                   [PASS]
+  ΓòÜΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+
+[main] INFO com.youtube.perf.Main - All probes complete.

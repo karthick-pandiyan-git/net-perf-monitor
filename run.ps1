@@ -4,11 +4,22 @@
 # box-drawing characters in the report render correctly in any PowerShell terminal.
 #
 # Usage:
-#   .\run.ps1                          Default duration from test.properties (30 s)
-#   .\run.ps1 --duration 60            60-second monitoring window
-#   .\run.ps1 --duration 300           5-minute monitoring window
-#   .\run.ps1 --duration 900           15-minute monitoring window (max)
-#   .\run.ps1 | Tee-Object output.txt  Capture output while displaying it
+#   .\run.ps1                                Default mode (all probes), duration from test.properties
+#   .\run.ps1 --duration 60                  60-second monitoring window, all probes
+#   .\run.ps1 --mode youtube                 YouTube probe only
+#   .\run.ps1 --mode website                 Website probe only
+#   .\run.ps1 --mode dns                     DNS probe only
+#   .\run.ps1 --mode youtube,website         YouTube + Website (no DNS)
+#   .\run.ps1 --mode youtube,dns             YouTube + DNS (no Website)
+#   .\run.ps1 --mode website,dns             Website + DNS (no YouTube)
+#   .\run.ps1 --mode all                     All three probes (explicit)
+#   .\run.ps1 --mode all --duration 60       All probes, 60-second window
+#   .\run.ps1 --mode all --duration 30 --report 5   Print JSON every 5 s, final at end
+#   .\run.ps1 --mode dns --report 10                DNS-only, snapshot every 10 s
+#   .\run.ps1 | Tee-Object output.json       Capture JSON output while displaying it
+#
+# Output: a single JSON object printed to stdout with the snapshot values
+#         collected at the end of the monitoring window.
 #
 # Duration range: 30 – 900 seconds (30 s to 15 minutes).
 # Edit test.properties to change URLs, domains, or the default duration.

@@ -3,6 +3,7 @@ package com.youtube.perf;
 import io.github.bonigarcia.wdm.WebDriverManager;
 import org.openqa.selenium.By;
 import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.TimeoutException;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.chrome.ChromeDriver;
@@ -20,6 +21,11 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.net.Inet4Address;
+import java.net.Inet6Address;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 
 /**
  * Opens each website URL in a separate tab inside a single Chrome instance,
@@ -33,15 +39,25 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
 
     private static final Logger logger = LoggerFactory.getLogger(WebsiteTester.class);
 
-    private static final int CYCLE_INTERVAL_MS       = 5_000;
-    private static final int PAGE_LOAD_TIMEOUT_SECS  = 10;  // reduced from 15 — crashes fail faster
-    private static final int ELEMENT_WAIT_SECS       = 8;   // reduced from 10
+    private static final int CYCLE_INTERVAL_MS         = 5_000;
+    // Initial tab open (cold load: uncached DNS, new TLS, full JS bundle download).
+    // Heavy sites like Amazon/Facebook regularly take 8–15 s on first load.
+    private static final int PAGE_LOAD_TIMEOUT_COLD_SECS = 45;
+    // Warm cycle limit — tabs are already open and connections are reused.
+    private static final int PAGE_LOAD_TIMEOUT_SECS      = 30;
+    private static final int ELEMENT_WAIT_SECS           = 15;
 
     private final List<String> urls;
     private final CountDownLatch startLatch;
-    private final int refreshCycles;
+    /** Epoch-ms at which the measurement loop must stop. */
+    private final long absoluteDeadlineMs;
     /** Drop a tab only if it fails every cycle — gives transient outages a fair chance. */
     private final int maxConsecutiveFailures;
+    /**
+     * Shared results store published to Main for periodic reporting.
+     * Must be thread-safe (e.g. {@code CopyOnWriteArrayList}).
+     */
+    private final List<WebsiteMetrics> liveResults;
 
     /**
      * Creates a new {@code WebsiteTester}.
@@ -51,12 +67,19 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
      *                        ready; both browser probes count down the same latch
      * @param durationSeconds total monitoring duration in seconds; determines the
      *                        number of refresh cycles ({@code durationSeconds / 5})
+     * @param liveResults     shared list used as the internal results store;
+     *                        must be thread-safe (e.g. {@code CopyOnWriteArrayList})
      */
-    public WebsiteTester(List<String> urls, CountDownLatch startLatch, int durationSeconds) {
-        this.urls                  = urls;
-        this.startLatch            = startLatch;
-        this.refreshCycles         = Math.max(1, durationSeconds / (CYCLE_INTERVAL_MS / 1000));
-        this.maxConsecutiveFailures = this.refreshCycles;
+    public WebsiteTester(List<String> urls, CountDownLatch startLatch, int durationSeconds,
+                         List<WebsiteMetrics> liveResults, long programStartMs) {
+        this.urls                   = urls;
+        this.startLatch             = startLatch;
+        // Absolute deadline: programStartMs + durationSeconds.
+        // Setup time (tab open + cold loads) is consumed from the budget, so total
+        // wall-clock time equals durationSeconds regardless of how long setup takes.
+        this.absoluteDeadlineMs     = programStartMs + durationSeconds * 1000L;
+        this.maxConsecutiveFailures = Math.max(1, durationSeconds / (CYCLE_INTERVAL_MS / 1000));
+        this.liveResults            = liveResults;
     }
 
     /**
@@ -73,7 +96,9 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
     public List<WebsiteMetrics> call() {
         WebDriverManager.chromedriver().setup();
         WebDriver driver = createDriver();
-        List<WebsiteMetrics> results = new ArrayList<>();
+        // Use the shared live list so each result is visible to the periodic reporter
+        // thread in Main as soon as it is written.
+        List<WebsiteMetrics> results = liveResults;
 
         try {
             List<String> handles;
@@ -86,14 +111,20 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
                 startLatch.countDown();
             }
             startLatch.await(5, TimeUnit.MINUTES);
-            logger.info("[WebsiteTester] All probes ready \u2014 starting {}-second measurement window", refreshCycles * (CYCLE_INTERVAL_MS / 1000));
+            // Switch from the generous cold-load timeout used during tab setup to
+            // the shorter warm-cycle timeout now that connections are established.
+            driver.manage().timeouts().pageLoadTimeout(Duration.ofSeconds(PAGE_LOAD_TIMEOUT_SECS));
+            logger.info("[WebsiteTester] All probes ready \u2014 {} s remaining in budget",
+                Math.max(0, (absoluteDeadlineMs - System.currentTimeMillis()) / 1000));
             // Consecutive failure counter per tab. Incremented on navigation failure,
             // reset on success. When it reaches maxConsecutiveFailures the handle
             // is nulled so we stop wasting cycle time on a chronically-failing site.
             int[] consecutiveFailures = new int[handles.size()];
-            for (int cycle = 1; cycle <= refreshCycles; cycle++) {
+            int cycle = 0;
+            while (System.currentTimeMillis() < absoluteDeadlineMs) {
+                cycle++;
                 long cycleStart = System.currentTimeMillis();
-                logger.info("[WebsiteTester] ── Cycle {}/{} ──", cycle, refreshCycles);
+                logger.info("[WebsiteTester] ── Cycle {} ──", cycle);
 
                 for (int i = 0; i < handles.size(); i++) {
                     if (handles.get(i) == null) {
@@ -151,12 +182,12 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
                     }
                 }
 
-                // Sleep for the remainder of the 5 s interval before the next cycle
-                long elapsed = System.currentTimeMillis() - cycleStart;
-                long remaining = CYCLE_INTERVAL_MS - elapsed;
-                if (remaining > 0 && cycle < refreshCycles) {
-                    Thread.sleep(remaining);
-                }
+                // Sleep for the remainder of the 5 s interval, but cap at the
+                // time left before the absolute deadline so we don't overshoot.
+                long elapsed  = System.currentTimeMillis() - cycleStart;
+                long timeLeft = absoluteDeadlineMs - System.currentTimeMillis();
+                long sleepMs  = Math.min(CYCLE_INTERVAL_MS - elapsed, timeLeft);
+                if (sleepMs > 0) Thread.sleep(sleepMs);
             }
 
         } catch (InterruptedException e) {
@@ -200,7 +231,9 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         );
         ChromeDriver driver = new ChromeDriver(options);
-        driver.manage().timeouts().pageLoadTimeout(Duration.ofSeconds(PAGE_LOAD_TIMEOUT_SECS));
+        // Start with the cold-load timeout for initial tab setup.
+        // It is reduced to PAGE_LOAD_TIMEOUT_SECS before measurement cycles begin.
+        driver.manage().timeouts().pageLoadTimeout(Duration.ofSeconds(PAGE_LOAD_TIMEOUT_COLD_SECS));
         return driver;
     }
 
@@ -288,7 +321,46 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
         m.setTimestamp(System.currentTimeMillis());
 
         try {
-            driver.navigate().to(url);
+            try {
+                driver.navigate().to(url);
+            } catch (TimeoutException te) {
+                // Page load exceeded the timeout — the page may be partially loaded.
+                // Stop Chrome from continuing to fetch resources, then try to read
+                // whatever Navigation Timing data is already available before giving up.
+                try { ((JavascriptExecutor) driver).executeScript("window.stop();"); } catch (Exception ignored) {}
+                logger.warn("[Site-{}] Cycle {} load timeout for {} — collecting partial timings",
+                    tabIndex, cycle, url);
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> partial = (Map<String, Object>)
+                        ((JavascriptExecutor) driver).executeScript("""
+                            var t = performance.timing, ns = t.navigationStart;
+                            return {
+                                pageLoadTime:       t.loadEventEnd > 0             ? t.loadEventEnd - ns             : -1,
+                                domContentLoaded:   t.domContentLoadedEventEnd > 0 ? t.domContentLoadedEventEnd - ns : -1,
+                                timeToFirstByte:    t.responseStart > 0            ? t.responseStart - ns            : -1,
+                                dnsLookupTime:      t.domainLookupEnd  - t.domainLookupStart,
+                                tcpConnectionTime:  t.connectEnd       - t.connectStart,
+                                domInteractiveTime: t.domInteractive > 0           ? t.domInteractive - ns           : -1
+                            };
+                            """);
+                    if (partial != null) {
+                        m.setPageLoadTime(toLong(partial.get("pageLoadTime")));
+                        m.setDomContentLoaded(toLong(partial.get("domContentLoaded")));
+                        m.setTimeToFirstByte(toLong(partial.get("timeToFirstByte")));
+                        m.setDnsLookupTime(toLong(partial.get("dnsLookupTime")));
+                        m.setTcpConnectionTime(toLong(partial.get("tcpConnectionTime")));
+                        m.setDomInteractiveTime(toLong(partial.get("domInteractiveTime")));
+                    }
+                    try { m.setPageTitle(driver.getTitle()); } catch (Exception ignored) {}
+                } catch (Exception ignored) {}
+                m.setSuccess(false);
+                // Keep first line of timeout message only — Selenium appends a full
+                // capabilities/session dump after the first newline which is noise.
+                m.setErrorMessage("timeout: page load exceeded " + PAGE_LOAD_TIMEOUT_SECS + "s");
+                try { driver.navigate().to("about:blank"); } catch (Exception ignored) {}
+                return m;
+            }
 
             // Wait for document.readyState === 'complete' so timing values are final
             new WebDriverWait(driver, Duration.ofSeconds(ELEMENT_WAIT_SECS))
@@ -333,11 +405,20 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
 
             try { m.setPageTitle(driver.getTitle()); } catch (Exception ignored) {}
             m.setSuccess(true);
+            // Probe IPv4 and IPv6 TCP reachability to port 443 independently of the
+            // browser so we can report on each IP version's stability every cycle.
+            probeIpConnectivity(m.getDomain(), m);
 
         } catch (Exception e) {
             m.setSuccess(false);
-            m.setErrorMessage(e.getMessage());
-            logger.warn("[Site-{}] Cycle {} navigation error: {}", tabIndex, cycle, e.getMessage());
+            // Trim to first line — Selenium appends capabilities/session info after \n.
+            String msg = e.getMessage();
+            if (msg != null) {
+                int nl = msg.indexOf('\n');
+                msg = nl > 0 ? msg.substring(0, nl).trim() : msg.trim();
+            }
+            m.setErrorMessage(msg);
+            logger.warn("[Site-{}] Cycle {} navigation error: {}", tabIndex, cycle, msg);
             // Stop any pending page load and navigate back to a blank page.
             // Without this, Chrome keeps trying to load the failed page in the
             // background, holding the renderer busy and causing ALL subsequent
@@ -351,6 +432,66 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
         }
 
         return m;
+    }
+
+    /**
+     * Probes TCP reachability to port 443 for the IPv4 (A record) and IPv6 (AAAA record)
+     * addresses of the given domain, then records the results on the supplied metrics object.
+     *
+     * <p>This runs Java-side after each successful page load, independent of the browser.
+     * A failure here means the OS network stack cannot reach the site over that IP version
+     * even though Chrome may have used happy-eyeballs to load the page successfully.</p>
+     *
+     * <p>The probe uses a 3-second connect timeout per address to avoid blocking a cycle
+     * when IPv6 is absent or filtered at the network level.</p>
+     *
+     * @param domain the hostname to probe (e.g. {@code "facebook.com"})
+     * @param m      the metrics object to populate with IPv4/IPv6 results
+     */
+    private void probeIpConnectivity(String domain, WebsiteMetrics m) {
+        try {
+            InetAddress[] addrs = InetAddress.getAllByName(domain);
+            InetAddress ipv4 = null, ipv6 = null;
+            for (InetAddress a : addrs) {
+                if (ipv4 == null && a instanceof Inet4Address) ipv4 = a;
+                if (ipv6 == null && a instanceof Inet6Address) ipv6 = a;
+            }
+
+            if (ipv4 != null) {
+                m.setIpv4Address(ipv4.getHostAddress());
+                long s = System.nanoTime();
+                try (Socket sock = new Socket()) {
+                    sock.connect(new InetSocketAddress(ipv4, 443), 3_000);
+                    m.setIpv4ConnectMs((System.nanoTime() - s) / 1_000_000);
+                    m.setIpv4Reachable(true);
+                } catch (Exception e) {
+                    m.setIpv4ConnectMs((System.nanoTime() - s) / 1_000_000);
+                    m.setIpv4Reachable(false);
+                }
+            }
+
+            if (ipv6 != null) {
+                m.setIpv6Address(ipv6.getHostAddress());
+                long s = System.nanoTime();
+                try (Socket sock = new Socket()) {
+                    sock.connect(new InetSocketAddress(ipv6, 443), 3_000);
+                    m.setIpv6ConnectMs((System.nanoTime() - s) / 1_000_000);
+                    m.setIpv6Reachable(true);
+                } catch (Exception e) {
+                    m.setIpv6ConnectMs((System.nanoTime() - s) / 1_000_000);
+                    m.setIpv6Reachable(false);
+                }
+            }
+
+            logger.debug("[Site-{}] IP probe {} → IPv4:{} {}ms IPv6:{} {}ms",
+                m.getTabIndex(), domain,
+                m.getIpv4Address(), m.getIpv4ConnectMs(),
+                m.getIpv6Address(), m.getIpv6ConnectMs());
+
+        } catch (Exception e) {
+            logger.warn("[Site-{}] IP connectivity probe failed for {}: {}",
+                m.getTabIndex(), domain, e.getMessage());
+        }
     }
 
     /**

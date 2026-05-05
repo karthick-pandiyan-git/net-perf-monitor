@@ -53,19 +53,33 @@ public class YouTubePerformanceTester {
      * it counts down {@code startLatch} after all tabs are open so that
      * {@link WebsiteTester} and the DNS monitor start their windows at the same time.</p>
      *
+     * <p>{@code liveMetrics} is a shared list pre-populated by the caller with one
+     * {@link VideoMetrics} placeholder per URL (tabIndex + url already set).
+     * After every sweep the placeholders are updated with the latest network
+     * aggregates so that a periodic reporter thread can read in-progress data
+     * without waiting for the full monitoring window to complete.</p>
+     *
      * @param urls            YouTube video URLs to open (one per tab)
      * @param startLatch      barrier counted down once tab setup is complete
      * @param durationSeconds total monitoring window in seconds
-     * @return per-tab {@link VideoMetrics} list, ordered by tab index
+     * @param liveMetrics     shared list used as the internal metrics store;
+     *                        must be thread-safe (e.g. {@code CopyOnWriteArrayList})
+     * @return the same {@code liveMetrics} list, fully populated at the end
      */
-    public List<VideoMetrics> runTest(List<String> urls, CountDownLatch startLatch, int durationSeconds) {
-        int numSweeps = Math.max(1, durationSeconds / SWEEP_INTERVAL_SECONDS);
+    public List<VideoMetrics> runTest(List<String> urls, CountDownLatch startLatch, int durationSeconds,
+                                      List<VideoMetrics> liveMetrics, long programStartMs) {
+        // Absolute deadline: program start + durationSeconds.
+        // Using an absolute (not window-relative) deadline means tab setup time is
+        // consumed from the budget, so total wall-clock time equals durationSeconds.
+        final long absoluteDeadlineMs = programStartMs + durationSeconds * 1000L;
         WebDriverManager.chromedriver().setup();
         WebDriver driver = createDriver();
 
         // Ordered list of window handles, matching url index
         List<String> handles  = new ArrayList<>();
-        List<VideoMetrics> metrics = new ArrayList<>();
+        // Use liveMetrics as the backing list so in-progress data is always visible
+        // to the periodic reporter thread in Main.
+        List<VideoMetrics> metrics = liveMetrics;
         // Per-handle network sample accumulator
         Map<String, List<NetworkSample>> samplesMap = new LinkedHashMap<>();
 
@@ -83,16 +97,33 @@ public class YouTubePerformanceTester {
                     metrics.add(m);
                     samplesMap.put(handles.get(i), new ArrayList<>());
                 }
+                // Collect page-load timings and page title from Navigation Timing API
+                // now that all tabs have finished loading. These values are stable and
+                // won't change, so reading them once here ensures they appear in every
+                // periodic snapshot (not just the final report).
+                for (int i = 0; i < handles.size(); i++) {
+                    driver.switchTo().window(handles.get(i));
+                    collectInitialTimings(driver, metrics.get(i));
+                }
                 logger.info("[YouTube] Tabs ready \u2014 waiting for all probes to sync...");
             } finally {
                 startLatch.countDown();
             }
             startLatch.await(5, TimeUnit.MINUTES);
-            logger.info("[YouTube] All probes ready \u2014 starting {}-second measurement window", durationSeconds);
+            logger.info("[YouTube] All probes ready \u2014 {} s remaining in budget",
+                Math.max(0, (absoluteDeadlineMs - System.currentTimeMillis()) / 1000));
             // ── 2. Monitoring sweeps ─────────────────────────────────────────
-            for (int sweep = 1; sweep <= numSweeps; sweep++) {
-                Thread.sleep(SWEEP_INTERVAL_SECONDS * 1000L);
-                logger.info("── Sweep {}/{} ──────────────────────────────────", sweep, numSweeps);
+            int sweep = 0;
+            while (System.currentTimeMillis() < absoluteDeadlineMs) {
+                // Sleep for the interval, but wake up early if the deadline is near
+                // so we don't overshoot.
+                long remaining = absoluteDeadlineMs - System.currentTimeMillis();
+                long sleepMs = Math.min(SWEEP_INTERVAL_SECONDS * 1000L, remaining);
+                if (sleepMs <= 0) break;
+                Thread.sleep(sleepMs);
+                if (System.currentTimeMillis() >= absoluteDeadlineMs) break;
+                sweep++;
+                logger.info("── Sweep {} ──────────────────────────────────", sweep);
 
                 for (int i = 0; i < handles.size(); i++) {
                     driver.switchTo().window(handles.get(i));
@@ -101,6 +132,18 @@ public class YouTubePerformanceTester {
 
                     NetworkSample sample = collectNetworkSample(driver, sweep);
                     samplesMap.get(handles.get(i)).add(sample);
+
+                    // Update live aggregate so periodic reporter sees current data
+                    List<NetworkSample> liveSamples = samplesMap.get(handles.get(i));
+                    VideoMetrics liveM = metrics.get(i);
+                    applyNetworkAggregates(liveM, liveSamples);
+                    if (!liveSamples.isEmpty()) {
+                        liveM.setBufferedSeconds(liveSamples.get(liveSamples.size() - 1).getVideoBuffered());
+                    }
+                    // Refresh video dimensions and title each sweep: videoWidth/videoHeight
+                    // are only non-zero once the video element has initialised, so checking
+                    // each sweep ensures snapshots show them as soon as they become available.
+                    refreshLiveTabState(driver, liveM);
 
                     logger.info("  [Tab-{}] #{} | {} KB/s | played={}s | buffered={}s | {} new segs | quality={}",
                         i + 1, sweep,
@@ -242,6 +285,7 @@ public class YouTubePerformanceTester {
             closeOverlayAd(driver);
             skipOrWaitForAd(driver, tabIndex);
             forcePlay(driver, tabIndex);
+            enableLoop(driver, tabIndex);
             setHighestQuality(driver, tabIndex);
         } catch (Exception e) {
             logger.debug("[Tab-{}] handleAdsAndForcePlay (non-fatal): {}", tabIndex, e.getMessage());
@@ -263,6 +307,9 @@ public class YouTubePerformanceTester {
             closeOverlayAd(driver);
             skipOrWaitForAd(driver, tabIndex);
             forcePlay(driver, tabIndex);
+            // Re-apply loop each sweep in case YouTube's player replaced the video
+            // element (e.g. after an ad or a quality change), which would clear loop.
+            enableLoop(driver, tabIndex);
         } catch (Exception e) {
             logger.debug("[Tab-{}] handleSweep (non-fatal): {}", tabIndex, e.getMessage());
         }
@@ -337,9 +384,10 @@ public class YouTubePerformanceTester {
      */
     private void skipOrWaitForAd(WebDriver driver, int tabIndex) throws InterruptedException {
         for (int round = 1; round <= MAX_AD_ROUNDS; round++) {
-            boolean adShowing = !driver.findElements(
-                By.cssSelector(".ytp-ad-player-overlay, .ytp-ad-player-overlay-layout")
-            ).isEmpty();
+            // Primary check: #movie_player.ad-showing is set by YouTube for ALL ad types
+            // (pre-roll, mid-roll, bumper, overlay). Fallback to overlay element check
+            // for older player builds that don't use the class.
+            boolean adShowing = isAdPlaying(driver);
             if (!adShowing) return;
 
             logger.info("[Tab-{}] Ad detected (round {}) — polling for skip button or ad end...", tabIndex, round);
@@ -348,11 +396,8 @@ public class YouTubePerformanceTester {
             boolean resolved = false;
 
             while (System.currentTimeMillis() < deadline) {
-                // (a) Check if the overlay has already gone (non-skippable ad finished)
-                boolean overlayGone = driver.findElements(
-                    By.cssSelector(".ytp-ad-player-overlay, .ytp-ad-player-overlay-layout")
-                ).isEmpty();
-                if (overlayGone) {
+                // (a) Check if ad has ended
+                if (!isAdPlaying(driver)) {
                     logger.info("[Tab-{}] Ad finished naturally (round {})", tabIndex, round);
                     resolved = true;
                     break;
@@ -393,6 +438,32 @@ public class YouTubePerformanceTester {
     }
 
     /**
+     * Returns {@code true} when any ad (pre-roll, mid-roll, bumper, overlay) is
+     * currently playing in the YouTube player.
+     *
+     * <p>Uses two independent signals:
+     * <ol>
+     *   <li>{@code #movie_player.ad-showing} — reliable class YouTube sets on the
+     *       player container for all ad types in modern builds.</li>
+     *   <li>The {@code .ytp-ad-player-overlay} / {@code .ytp-ad-player-overlay-layout}
+     *       elements — fallback for older player versions.</li>
+     * </ol>
+     * Either signal alone is sufficient to declare an ad is playing.
+     */
+    private boolean isAdPlaying(WebDriver driver) {
+        try {
+            Object result = ((JavascriptExecutor) driver).executeScript(
+                "var p = document.getElementById('movie_player');" +
+                "if (p && p.classList.contains('ad-showing')) return true;" +
+                "return !!document.querySelector('.ytp-ad-player-overlay, .ytp-ad-player-overlay-layout');"
+            );
+            return Boolean.TRUE.equals(result);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /**
      * Ensures the video element is actively playing.
      * Dismisses any "Continue watching?" confirmation dialog, then calls
      * {@code video.play()} via JavaScript if the video is paused.
@@ -402,22 +473,101 @@ public class YouTubePerformanceTester {
      * @param tabIndex 1-based tab number used in debug log messages
      * @throws InterruptedException if the thread is interrupted while sleeping
      */
-    private void forcePlay(WebDriver driver, int tabIndex) throws InterruptedException {
+    /**
+     * Sets {@code video.loop = true} on the page's video element so the video
+     * restarts automatically when it ends. This allows monitoring sessions longer
+     * than the video duration (e.g. 8-hour videos streamed for 10+ hours).
+     *
+     * <p>YouTube may replace the video element after ads or quality changes, so
+     * this is called both at tab setup and on every sweep to re-apply it.</p>
+     */
+    private void enableLoop(WebDriver driver, int tabIndex) {
         try {
-            WebElement btn = driver.findElement(By.cssSelector(
-                ".yt-confirm-dialog-renderer button, " +
-                "tp-yt-paper-button.yt-confirm-dialog-renderer--confirm-button"
-            ));
-            if (btn.isDisplayed()) { btn.click(); Thread.sleep(400); }
+            ((JavascriptExecutor) driver).executeScript(
+                "var v = document.querySelector('video'); if (v) { v.loop = true; }");
+            logger.debug("[Tab-{}] loop enabled", tabIndex);
         } catch (Exception ignored) {}
+    }
 
+    private void forcePlay(WebDriver driver, int tabIndex) throws InterruptedException {
+        // ── 1. Dismiss any YouTube pause/interrupt dialogs ───────────────────
+        // YouTube surfaces several dialogs that pause the video during long sessions:
+        //   (a) "Video paused. Continue watching?" — shown after ~1–4 h of inactivity.
+        //       Selector: .yt-confirm-dialog-renderer confirm button, or the newer
+        //       ytp-pause-overlay "Yes" button.
+        //   (b) "Still watching?" / "Are you still there?" — shown by some embed/kiosk
+        //       configs; selector: .yt-confirm-dialog-renderer or button[aria-label*='yes']
+        //   (c) Generic confirm dialogs (e.g. sign-in prompts that pause playback).
+        // We try all known selectors in one pass. Clicking any visible button is safe —
+        // these dialogs only have a "Continue" / "Yes" / "Confirm" action.
+        dismissPauseDialogs(driver, tabIndex);
+
+        // ── 2. Resume playback via JS if video is still paused ───────────────
         try {
             Object result = ((JavascriptExecutor) driver).executeScript("""
                 var v = document.querySelector('video');
-                if (v) { v.muted = true; if (v.paused) { v.play().catch(function(){}); return 'played'; } return 'playing'; }
-                return 'no-video';
+                if (!v) return 'no-video';
+                v.muted = true;
+                if (v.paused || v.ended) {
+                    v.play().catch(function(){});
+                    return 'resumed';
+                }
+                return 'playing';
                 """);
+            if ("resumed".equals(result)) {
+                logger.info("[Tab-{}] Resumed paused video", tabIndex);
+            }
             logger.debug("[Tab-{}] forcePlay: {}", tabIndex, result);
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * Dismisses any YouTube dialog that interrupts long-running playback.
+     *
+     * <p>Known dialogs handled:</p>
+     * <ul>
+     *   <li><b>"Video paused. Continue watching?"</b> — appears after ~1–4 h of
+     *       background playback. The "Yes" button has class {@code ytp-pause-overlay-actions}
+     *       or lives inside {@code .yt-confirm-dialog-renderer}.</li>
+     *   <li><b>"Still watching?" / "Are you still there?"</b> — shown on some accounts
+     *       after extended inactivity; uses the same confirm-dialog structure.</li>
+     *   <li><b>Generic confirm dialogs</b> — any modal that blocks the player.</li>
+     * </ul>
+     *
+     * @param driver   the active Chrome session
+     * @param tabIndex 1-based tab number used in log messages
+     */
+    private void dismissPauseDialogs(WebDriver driver, int tabIndex) {
+        try {
+            Object dismissed = ((JavascriptExecutor) driver).executeScript("""
+                var selectors = [
+                    // "Video paused. Continue watching?" — newer player (2023+)
+                    '.ytp-pause-overlay .ytp-pause-overlay-actions button',
+                    // "Video paused" confirm dialog — older player
+                    '.yt-confirm-dialog-renderer button',
+                    'tp-yt-paper-button.yt-confirm-dialog-renderer--confirm-button',
+                    // "Still watching?" dialog
+                    'button[aria-label*="Continue"], button[aria-label*="Yes"], button[aria-label*="continue"]',
+                    // Any visible dialog confirm/primary button
+                    'yt-confirm-dialog-renderer paper-button[dialog-confirm]',
+                    '#confirm-button'
+                ];
+                for (var i = 0; i < selectors.length; i++) {
+                    var els = document.querySelectorAll(selectors[i]);
+                    for (var j = 0; j < els.length; j++) {
+                        var el = els[j];
+                        if (el.offsetParent !== null) { // visible check
+                            el.click();
+                            return selectors[i];
+                        }
+                    }
+                }
+                return null;
+                """);
+            if (dismissed != null) {
+                logger.info("[Tab-{}] Dismissed pause/interrupt dialog ({})", tabIndex, dismissed);
+                Thread.sleep(400);
+            }
         } catch (Exception ignored) {}
     }
 
@@ -537,6 +687,81 @@ public class YouTubePerformanceTester {
             } catch(e) {}
             return result;
             """;
+    }
+
+    /**
+     * Reads Navigation Timing and page title from the current tab once, right
+     * after the page has loaded. These values are stable and won't change during
+     * playback, so collecting them early ensures they appear in periodic snapshots.
+     *
+     * @param driver the active Chrome session (already switched to the target tab)
+     * @param m      the metrics object to populate
+     */
+    private void collectInitialTimings(WebDriver driver, VideoMetrics m) {
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>)
+                ((JavascriptExecutor) driver).executeScript("""
+                    var r = {};
+                    try {
+                        var t = window.performance.timing, ns = t.navigationStart;
+                        r.pageLoadTime         = t.loadEventEnd > 0          ? t.loadEventEnd - ns          : -1;
+                        r.domContentLoadedTime = t.domContentLoadedEventEnd > 0 ? t.domContentLoadedEventEnd - ns : -1;
+                        r.timeToFirstByte      = t.responseStart > 0         ? t.responseStart - ns         : -1;
+                        r.dnsLookupTime        = t.domainLookupEnd  - t.domainLookupStart;
+                        r.tcpConnectionTime    = t.connectEnd       - t.connectStart;
+                    } catch(e) {}
+                    try { r.pageTitle = document.title; } catch(e) {}
+                    return r;
+                    """);
+            if (data != null) {
+                m.setPageLoadTime(toLong(data.get("pageLoadTime")));
+                m.setDomContentLoadedTime(toLong(data.get("domContentLoadedTime")));
+                m.setTimeToFirstByte(toLong(data.get("timeToFirstByte")));
+                m.setDnsLookupTime(toLong(data.get("dnsLookupTime")));
+                m.setTcpConnectionTime(toLong(data.get("tcpConnectionTime")));
+                String title = (String) data.get("pageTitle");
+                if (title != null && !title.isBlank()) m.setPageTitle(title);
+            }
+        } catch (Exception e) {
+            logger.debug("[Tab-{}] Initial timing collection error: {}", m.getTabIndex(), e.getMessage());
+        }
+    }
+
+    /**
+     * Updates video dimensions and page title on the live metrics object from the
+     * current DOM state. Called each sweep so that periodic snapshots show these
+     * fields as soon as the video element initialises (videoWidth/videoHeight start
+     * at 0 before playback begins).
+     *
+     * @param driver the active Chrome session (already switched to the target tab)
+     * @param m      the live metrics object to update in-place
+     */
+    private void refreshLiveTabState(WebDriver driver, VideoMetrics m) {
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>)
+                ((JavascriptExecutor) driver).executeScript("""
+                    var r = {};
+                    try {
+                        var v = document.querySelector('video');
+                        if (v) { r.videoWidth = v.videoWidth; r.videoHeight = v.videoHeight; }
+                    } catch(e) {}
+                    try { r.pageTitle = document.title; } catch(e) {}
+                    return r;
+                    """);
+            if (data != null) {
+                int w = toInt(data.get("videoWidth"));
+                int h = toInt(data.get("videoHeight"));
+                if (w > 0) m.setVideoWidth(w);
+                if (h > 0) m.setVideoHeight(h);
+                // Update title once the full video title is loaded (initially the
+                // page may show a generic 'YouTube' title before the JS renders it).
+                String title = (String) data.get("pageTitle");
+                if (title != null && !title.isBlank() && !title.equals("YouTube"))
+                    m.setPageTitle(title);
+            }
+        } catch (Exception ignored) {}
     }
 
     /**
