@@ -109,22 +109,25 @@ Three probes run concurrently via a fixed-thread `ExecutorService`. YouTube and 
 ### YouTube (up to 10 checks per tab)
 | Check | Threshold |
 |---|---|
-| TTFB | ≤ 3000 ms (tab 1, cold) / ≤ 1200 ms (tabs 2+, warm) |
+| TTFB (server latency) | ≤ 3000 ms (tab 1, cold) / ≤ 1500 ms (tabs 2+, warm) |
 | Page Load Time | ≤ 15000 ms (tab 1, cold) / ≤ 12000 ms (tabs 2+, warm) |
 | Stream Buffer Depth | ≥ 10 s ahead of playhead |
 | Avg Streaming Bandwidth | ≥ 250 KB/s (or pre-buffered) |
 | Video Quality Stability | No ABR downgrade from peak quality |
-| Stats-for-Nerds Connection Speed | ≥ 1000 Kbps |
-| Stats-for-Nerds Buffer Health | ≥ 5 s |
-| Resolution Match | Reported resolution ≥ 720p |
-| Buffer Depth Consistency | p95 buffer stddev ≤ 3 s |
-| Catastrophic Frame Drop | Drop rate ≤ 5% |
+| SFN Connection Speed | ≥ 2500 Kbps (HD minimum) |
+| SFN Buffer Health | Never 0 s during any sweep |
+| SFN Resolution Match | Current resolution == optimal resolution |
+| Buffer Depth Consistency | μ−1σ ≥ 10 s (lower confidence bound never dips below buffer minimum) |
+| Frame Drop (Catastrophic) | No single sweep at 100% frame drop |
 
-### Website (per refresh cycle, per-site thresholds apply)
-| Check | Default Threshold |
-|---|---|
-| Page Load Time | ≤ 8000 ms (cycle 1, cold) / ≤ 5000 ms (cycles 2+, warm) |
-| TTFB | ≤ 2000 ms (cycle 1, cold) / ≤ 1200 ms (cycles 2+, warm) |
+### Website (per refresh cycle)
+| Check | Threshold | Notes |
+|---|---|---|
+| Page Load Time | ≤ 8000 ms (cycle 1, cold) / ≤ 5000 ms (cycles 2+, warm) | Per-site overrides apply |
+| TTFB | ≤ 2000 ms (cycle 1, cold) / ≤ 1200 ms (cycles 2+, warm) | Per-site overrides apply |
+| DOMContentLoaded | ≤ 4000 ms | Fixed threshold |
+| DNS Lookup | ≤ 200 ms | Fixed threshold; 0 = OS cache hit |
+| TCP Connect | — | Reported only, no pass/fail |
 
 ### DNS
 | Check | Threshold |
