@@ -8,6 +8,7 @@ import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
+import org.openqa.selenium.interactions.Actions;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.FluentWait;
 import org.openqa.selenium.support.ui.WebDriverWait;
@@ -21,9 +22,12 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalDouble;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -68,10 +72,6 @@ public class YouTubePerformanceTester {
      */
     public List<VideoMetrics> runTest(List<String> urls, CountDownLatch startLatch, int durationSeconds,
                                       List<VideoMetrics> liveMetrics, long programStartMs) {
-        // Absolute deadline: program start + durationSeconds.
-        // Using an absolute (not window-relative) deadline means tab setup time is
-        // consumed from the budget, so total wall-clock time equals durationSeconds.
-        final long absoluteDeadlineMs = programStartMs + durationSeconds * 1000L;
         WebDriverManager.chromedriver().setup();
         WebDriver driver = createDriver();
 
@@ -82,6 +82,10 @@ public class YouTubePerformanceTester {
         List<VideoMetrics> metrics = liveMetrics;
         // Per-handle network sample accumulator
         Map<String, List<NetworkSample>> samplesMap = new LinkedHashMap<>();
+        int sweep = 0;
+        // Deadline is set after the latch so durationSeconds is the actual monitoring
+        // window, not including browser startup and tab-loading time.
+        long absoluteDeadlineMs = programStartMs + durationSeconds * 1000L; // fallback
 
         try {
             // ── 1. Open all tabs ─────────────────────────────────────────────
@@ -110,10 +114,12 @@ public class YouTubePerformanceTester {
                 startLatch.countDown();
             }
             startLatch.await(5, TimeUnit.MINUTES);
-            logger.info("[YouTube] All probes ready \u2014 {} s remaining in budget",
-                Math.max(0, (absoluteDeadlineMs - System.currentTimeMillis()) / 1000));
+            // Start the monitoring window NOW — after all probes are synced and tabs are
+            // loaded. Browser startup and tab-loading can take 15-30 s; using programStartMs
+            // for the deadline caused the sweep loop to get 0 iterations on short runs.
+            absoluteDeadlineMs = System.currentTimeMillis() + durationSeconds * 1000L;
+            logger.info("[YouTube] All probes ready \u2014 monitoring for {} s", durationSeconds);
             // ── 2. Monitoring sweeps ─────────────────────────────────────────
-            int sweep = 0;
             while (System.currentTimeMillis() < absoluteDeadlineMs) {
                 // Sleep for the interval, but wake up early if the deadline is near
                 // so we don't overshoot.
@@ -131,6 +137,22 @@ public class YouTubePerformanceTester {
                     handleSweep(driver, i + 1);
 
                     NetworkSample sample = collectNetworkSample(driver, sweep);
+
+                    // Read connection speed from the Stats for Nerds panel (panel is
+                    // guaranteed open by handleSweep above). Uses robust multi-strategy
+                    // reading so a transient DOM layout difference won't silently drop data.
+                    StatsForNerdsData sweepSfn = readStatsForNerds(driver);
+                    if (sweepSfn.getConnectionSpeedKbps() > 0) {
+                        sample.setConnectionSpeedKbps(sweepSfn.getConnectionSpeedKbps());
+                    }
+                    if (sweepSfn.getBufferHealthSecs() >= 0) {
+                        sample.setBufferHealthSecs(sweepSfn.getBufferHealthSecs());
+                    }
+                    if (sweepSfn.getDroppedFrames() >= 0) {
+                        sample.setDroppedFrames(sweepSfn.getDroppedFrames());
+                        sample.setTotalFrames(sweepSfn.getTotalFrames());
+                    }
+
                     samplesMap.get(handles.get(i)).add(sample);
 
                     // Update live aggregate so periodic reporter sees current data
@@ -145,13 +167,16 @@ public class YouTubePerformanceTester {
                     // each sweep ensures snapshots show them as soon as they become available.
                     refreshLiveTabState(driver, liveM);
 
-                    logger.info("  [Tab-{}] #{} | {} KB/s | played={}s | buffered={}s | {} new segs | quality={}",
+                    // Log what was actually read from Stats for Nerds this sweep.
+                    // Frames are cumulative since session start (increasing counters).
+                    logger.info("  [Tab-{}] #{} | SFN: connSpeed={} Mbps | bufHealth={} s | frames={} dropped of {} | quality={}",
                         i + 1, sweep,
-                        String.format("%.1f", sample.getBandwidthKBps()),
-                        String.format("%.1f", sample.getVideoCurrentTime()),
-                        String.format("%.1f", sample.getVideoBuffered()),
-                        sample.getRecentSegmentCount(),
-                        // Mark ad-during samples clearly so logs are unambiguous
+                        sweepSfn.getConnectionSpeedKbps() > 0
+                            ? String.format("%.1f", sweepSfn.getConnectionSpeedKbps() / 1000.0) : "n/a",
+                        sweepSfn.getBufferHealthSecs() >= 0
+                            ? String.format("%.2f", sweepSfn.getBufferHealthSecs()) : "n/a",
+                        sweepSfn.getDroppedFrames() >= 0 ? sweepSfn.getDroppedFrames() : "n/a",
+                        sweepSfn.getTotalFrames()   >= 0 ? sweepSfn.getTotalFrames()   : "n/a",
                         sample.isAdPlaying() ? "[AD-skipped]" :
                             sample.getQualityLabel() != null ? sample.getQualityLabel() : "?");
                 }
@@ -159,23 +184,80 @@ public class YouTubePerformanceTester {
 
             // ── 3. Final per-tab metrics collection ──────────────────────────
             for (int i = 0; i < handles.size(); i++) {
-                driver.switchTo().window(handles.get(i));
-                // Lightweight sweep handler for the final pass too — we only need
-                // the video to be playing; quality must not be altered at this stage.
-                handleSweep(driver, i + 1);
-
                 VideoMetrics m = metrics.get(i);
                 List<NetworkSample> samples = samplesMap.get(handles.get(i));
+                // Always commit sweep data — these are in-memory and do not need the browser.
                 m.setNetworkSamples(samples);
                 applyNetworkAggregates(m, samples);
                 m.setMetricsCollectedAt(System.currentTimeMillis());
-                collectFinalMetrics(driver, m);
+                try {
+                    driver.switchTo().window(handles.get(i));
+                    // Lightweight sweep handler for the final pass too — we only need
+                    // the video to be playing; quality must not be altered at this stage.
+                    handleSweep(driver, i + 1);
+                    collectFinalMetrics(driver, m);
+                    // Ensure the Stats for Nerds panel is open before reading — it may have
+                    // been closed by a tab switch, ad playback, or quality change since setup.
+                    openStatsForNerds(driver, i + 1);
+                    Thread.sleep(1200); // let the panel populate its values (animation + JS render)
+                    StatsForNerdsData sfn = readStatsForNerds(driver);
+                    if (sfn.isAvailable()) {
+                        // Average connectionSpeedKbps across all sweep samples instead of using
+                        // the instantaneous final value, which is more representative.
+                        double avgConnSpeed = samples.stream()
+                            .filter(s -> s.getConnectionSpeedKbps() > 0)
+                            .mapToDouble(NetworkSample::getConnectionSpeedKbps)
+                            .average().orElse(sfn.getConnectionSpeedKbps());
+                        sfn.setConnectionSpeedKbps(avgConnSpeed);
+                        // Average bufferHealthSecs across all sweep samples instead of using
+                        // the instantaneous final value, which is more representative.
+                        double avgBufHealth = samples.stream()
+                            .filter(s -> s.getBufferHealthSecs() >= 0)
+                            .mapToDouble(NetworkSample::getBufferHealthSecs)
+                            .average().orElse(sfn.getBufferHealthSecs());
+                        sfn.setBufferHealthSecs(avgBufHealth);
+                        m.setSfnData(sfn);
+                        logger.info("[Tab-{}] Stats for Nerds: speed(avg)={} Kbps, bufHealth(avg)={} s, res={}, codecs={}",
+                            i + 1, String.format("%.0f", avgConnSpeed),
+                            String.format("%.2f", avgBufHealth),
+                            sfn.getCurrentResolution(), sfn.codecSummary());
+                    } else {
+                        // Live panel unavailable — derive SFN from sweep samples so that
+                        // SFN Connection Speed and SFN Buffer Health checks still run.
+                        synthesizeSfnFromSweeps(m, samples, i + 1);
+                    }
+                } catch (InterruptedException ie) {
+                    // Selenium's internal shutdown code restores the thread interrupt flag
+                    // when the browser process dies (via shutdownGracefully → awaitTermination).
+                    // Clear it here so the remaining tabs are not skipped.
+                    Thread.interrupted();
+                    logger.warn("[Tab-{}] Final collection interrupted (browser may have died) — using sweep data", i + 1);
+                    synthesizeSfnFromSweeps(m, samples, i + 1);
+                } catch (Exception e) {
+                    // Non-fatal: browser crash, stale session, etc.  Preserve what was
+                    // already stored (initial timings + sweep aggregates) and derive SFN
+                    // from sweep samples so quality checks still run.
+                    logger.warn("[Tab-{}] Final collection failed (non-fatal): {} — using sweep data",
+                        i + 1, e.getMessage());
+                    synthesizeSfnFromSweeps(m, samples, i + 1);
+                }
                 logger.info("[Tab-{}] Final metrics collected", i + 1);
             }
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            logger.error("Test interrupted", e);
+            logger.error("Test interrupted — preserving {} sweep samples collected so far", sweep);
+            // Save whatever sweep data was collected before interruption so the
+            // report still shows partial results rather than "0 sweeps".
+            for (int i = 0; i < handles.size(); i++) {
+                VideoMetrics m = metrics.size() > i ? metrics.get(i) : null;
+                if (m == null) continue;
+                List<NetworkSample> partial = samplesMap.get(handles.get(i));
+                if (partial != null && !partial.isEmpty()) {
+                    m.setNetworkSamples(partial);
+                    applyNetworkAggregates(m, partial);
+                }
+            }
         } finally {
             try { driver.quit(); } catch (Exception ignored) {}
             logger.info("Browser closed.");
@@ -219,6 +301,9 @@ public class YouTubePerformanceTester {
         options.addArguments("--disable-renderer-backgrounding");
         options.addArguments("--disable-background-timer-throttling");
         options.addArguments("--disable-backgrounding-occluded-windows");
+        // Suppress ChromeDriver DevTools discovery logs (CDP version mismatch warnings)
+        options.addArguments("--log-level=3");
+        options.addArguments("--silent");
 
         ChromeDriver driver = new ChromeDriver(options);
         driver.manage().timeouts().pageLoadTimeout(Duration.ofSeconds(PAGE_LOAD_TIMEOUT_SECS));
@@ -240,6 +325,16 @@ public class YouTubePerformanceTester {
      * with the corresponding window-handle strings in the same order.
      * Ad dismissal and forced playback are applied to each tab as it opens.
      *
+     * <p>Strategy (mirrors {@link WebsiteTester#openAllTabs}):</p>
+     * <ol>
+     *   <li><b>Phase 1</b> — Trigger all navigations simultaneously via non-blocking
+     *       JS calls so Chrome fetches all URLs in parallel.</li>
+     *   <li><b>Phase 2</b> — Poll tabs until every one reports
+     *       {@code readyState='complete'}, up to {@link #PAGE_LOAD_TIMEOUT_SECS}.</li>
+     *   <li><b>Phase 3</b> — Initialise each loaded tab sequentially (consent dialog,
+     *       ad skip, force-play, quality, Stats for Nerds).</li>
+     * </ol>
+     *
      * @param driver  the Chrome instance to reuse
      * @param urls    list of YouTube video URLs to open
      * @param handles output list that receives one window handle per URL, in order
@@ -248,27 +343,81 @@ public class YouTubePerformanceTester {
     private void openAllTabs(WebDriver driver, List<String> urls, List<String> handles)
             throws InterruptedException {
 
-        for (int i = 0; i < urls.size(); i++) {
-            String url = urls.get(i);
-            if (i == 0) {
-                driver.get(url);
-                handles.add(driver.getWindowHandle());
-            } else {
-                ((JavascriptExecutor) driver).executeScript("window.open('about:blank', '_blank');");
+        // ── Phase 1: Trigger all navigations simultaneously ──────────────────
+        // Tab 1 already exists — navigate via window.location.href (non-blocking JS).
+        // Tabs 2..N use window.open(url, '_blank') so Chrome begins fetching all
+        // URLs in parallel without blocking on any individual page load.
+        try {
+            handles.add(driver.getWindowHandle());
+            ((JavascriptExecutor) driver).executeScript(
+                "window.location.href = arguments[0];", urls.get(0));
+            logger.info("[Tab-1] Triggered navigation: {}", urls.get(0));
+        } catch (Exception e) {
+            logger.warn("[Tab-1] Failed to start navigation: {}", e.getMessage());
+        }
+
+        for (int i = 1; i < urls.size(); i++) {
+            try {
+                ((JavascriptExecutor) driver).executeScript(
+                    "window.open(arguments[0], '_blank');", urls.get(i));
                 Set<String> all = driver.getWindowHandles();
+                final int tabIdx = i;
                 String newHandle = all.stream()
                     .filter(h -> !handles.contains(h))
                     .findFirst()
-                    .orElseThrow(() -> new IllegalStateException("New tab handle not found"));
+                    .orElseThrow(() -> new IllegalStateException(
+                        "New tab handle not found for tab " + (tabIdx + 1)));
                 handles.add(newHandle);
-                driver.switchTo().window(newHandle);
-                driver.get(url);
+                logger.info("[Tab-{}] Triggered navigation: {}", i + 1, urls.get(i));
+            } catch (Exception e) {
+                logger.warn("[Tab-{}] Failed to open tab: {}", i + 1, e.getMessage());
             }
-            logger.info("[Tab-{}] Opened: {}", i + 1, url);
-            dismissConsentDialog(driver);
-            handleAdsAndForcePlay(driver, i + 1);
-            Thread.sleep(800);
         }
+
+        // ── Phase 2: Wait for all tabs to reach readyState='complete' ────────
+        // All tabs are loading their URLs in parallel — poll until every tab
+        // reports 'complete'. A short initial pause lets Chrome register the
+        // navigations as 'loading' before the first readyState check so we don't
+        // read a stale 'complete' from the previous page.
+        Thread.sleep(500);
+
+        long deadline = System.currentTimeMillis() + (long) PAGE_LOAD_TIMEOUT_SECS * 1000L;
+        boolean[] loaded = new boolean[handles.size()];
+        while (System.currentTimeMillis() < deadline) {
+            boolean allDone = true;
+            for (int i = 0; i < handles.size(); i++) {
+                if (loaded[i] || handles.get(i) == null) continue;
+                try {
+                    driver.switchTo().window(handles.get(i));
+                    String state = (String) ((JavascriptExecutor) driver)
+                        .executeScript("return document.readyState;");
+                    String currentUrl = driver.getCurrentUrl();
+                    // Confirm the tab has navigated to the real URL, not a stale page.
+                    boolean urlReady = currentUrl != null && !currentUrl.startsWith("about:");
+                    if ("complete".equals(state) && urlReady) {
+                        loaded[i] = true;
+                        logger.info("[Tab-{}] Page ready: {}", i + 1, urls.get(i));
+                    } else {
+                        allDone = false;
+                    }
+                } catch (Exception e) {
+                    allDone = false;
+                }
+            }
+            if (allDone) break;
+            Thread.sleep(500);
+        }
+
+        // ── Phase 3: Initialise each loaded tab (ads, playback, quality, SFN) ─
+        // Tabs are fully loaded; apply per-tab setup sequentially (WebDriver is
+        // single-threaded and can only interact with one tab at a time).
+        for (int i = 0; i < handles.size(); i++) {
+            if (handles.get(i) == null) continue;
+            driver.switchTo().window(handles.get(i));
+            logger.info("[Tab-{}] Initialising: {}", i + 1, urls.get(i));
+            handleAdsAndForcePlay(driver, i + 1);
+        }
+
         logger.info("All {} tabs open in one Chrome instance.", urls.size());
     }
 
@@ -276,7 +425,8 @@ public class YouTubePerformanceTester {
 
     /**
      * Full setup-time handler: dismisses consent dialogs, skips/waits for ads,
-     * force-starts playback, and sets the highest available quality once.
+     * force-starts playback, sets the highest available quality once, and opens
+     * the Stats for Nerds overlay so live stats can be read on each sweep.
      * Called during tab initialisation only.
      */
     private void handleAdsAndForcePlay(WebDriver driver, int tabIndex) {
@@ -287,6 +437,7 @@ public class YouTubePerformanceTester {
             forcePlay(driver, tabIndex);
             enableLoop(driver, tabIndex);
             setHighestQuality(driver, tabIndex);
+            openStatsForNerds(driver, tabIndex);
         } catch (Exception e) {
             logger.debug("[Tab-{}] handleAdsAndForcePlay (non-fatal): {}", tabIndex, e.getMessage());
         }
@@ -310,6 +461,10 @@ public class YouTubePerformanceTester {
             // Re-apply loop each sweep in case YouTube's player replaced the video
             // element (e.g. after an ad or a quality change), which would clear loop.
             enableLoop(driver, tabIndex);
+            // Ensure the Stats for Nerds panel stays open — tab switches or ads can
+            // close it. openStatsForNerds detects 'already-open' cheaply and returns
+            // immediately when the panel is already visible.
+            openStatsForNerds(driver, tabIndex);
         } catch (Exception e) {
             logger.debug("[Tab-{}] handleSweep (non-fatal): {}", tabIndex, e.getMessage());
         }
@@ -594,6 +749,337 @@ public class YouTubePerformanceTester {
         }
     }
 
+    // ── Stats for Nerds panel ─────────────────────────────────────────────────
+
+    /**
+     * Opens YouTube's "Stats for Nerds" overlay panel on the current tab.
+     *
+     * <p>Strategy (tries both approaches in order):</p>
+     * <ol>
+     *   <li><b>JavaScript toggle</b> — reads the player's internal option state to
+     *       detect whether the panel is already visible and toggles it if not.
+     *       This works in most modern YouTube builds without requiring UI interaction.</li>
+     *   <li><b>Right-click context menu</b> — if the JS approach leaves the panel
+     *       closed, performs a Selenium {@link Actions#contextClick} on the player
+     *       element and clicks the "Stats for nerds" menu item.  Falls back
+     *       gracefully when the menu item is absent.</li>
+     * </ol>
+     *
+     * <p>The panel stays open for the lifetime of the tab once activated —
+     * {@link #readStatsForNerds} reads its values on every subsequent sweep.</p>
+     *
+     * @param driver   the active Chrome session (already on the target tab)
+     * @param tabIndex 1-based tab number used in log messages
+     */
+    private void openStatsForNerds(WebDriver driver, int tabIndex) {
+        // ── Pre-check: panel already visible? ────────────────────────────────
+        // Uses the same broad multi-strategy selector as readStatsForNerds so
+        // the panel is detected even when YouTube uses a generic container class
+        // that doesn't match '.ytp-sfn-stats'. Without this guard, every fallback
+        // attempt below reaches Attempt 2 (right-click context menu), which TOGGLES
+        // the panel — closing it if it was already open.
+        try {
+            Boolean alreadyVisible = (Boolean) ((JavascriptExecutor) driver).executeScript("""
+                // Strategy A: known container selectors
+                var sfnPanel = document.querySelector(
+                    '.ytp-sfn-stats, [class*="sfn-stats"], .html5-video-info-panel, [class*="video-info-panel"]');
+                if (sfnPanel) {
+                    var cs = window.getComputedStyle(sfnPanel);
+                    if (cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity) > 0)
+                        return true;
+                }
+                // Strategy B: label elements visible (panel open but container class unknown)
+                var labelEls = document.querySelectorAll(
+                    '.ytp-sfn-label, [class*="sfn-label"], [class*="sfn"][class*="label"]');
+                for (var i = 0; i < labelEls.length; i++) {
+                    var cs2 = window.getComputedStyle(labelEls[i]);
+                    if (cs2.display !== 'none' && cs2.visibility !== 'hidden') return true;
+                }
+                return false;
+                """);
+            if (Boolean.TRUE.equals(alreadyVisible)) {
+                logger.debug("[Tab-{}] SFN panel already visible — skipping open", tabIndex);
+                return;
+            }
+        } catch (Exception e) {
+            logger.debug("[Tab-{}] SFN pre-check (non-fatal): {}", tabIndex, e.getMessage());
+        }
+
+        // ── Attempt 1: JavaScript toggle via player option ───────────────────
+        try {
+            Object opened = ((JavascriptExecutor) driver).executeScript("""
+                var player = document.getElementById('movie_player');
+                if (!player) return 'no-player';
+
+                // Try player.getOption / setOption API (available in some YT builds)
+                if (typeof player.setOption === 'function') {
+                    try {
+                        player.setOption('statsText', 'show');
+                        return 'setOption-show';
+                    } catch(e) {}
+                }
+
+                // Try direct module access to the stats panel
+                if (typeof player.getModule === 'function') {
+                    try {
+                        var statsModule = player.getModule('stats');
+                        if (statsModule && typeof statsModule.show === 'function') {
+                            statsModule.show();
+                            return 'module-show';
+                        }
+                    } catch(e) {}
+                }
+
+                // Try yt.config_ flag as a last JS resort
+                try {
+                    if (window.yt && window.yt.config_) {
+                        window.yt.config_['SHOW_STATS_FOR_NERDS'] = true;
+                    }
+                } catch(e) {}
+
+                return 'not-toggled';
+                """);
+            logger.debug("[Tab-{}] SFN JS toggle: {}", tabIndex, opened);
+
+            // Check if it opened — use the same broad multi-strategy check as the pre-check
+            // above so a generic container class doesn't cause a false-negative here and
+            // send us into the right-click toggle path.
+            Boolean isOpen = (Boolean) ((JavascriptExecutor) driver).executeScript("""
+                var sfnPanel = document.querySelector(
+                    '.ytp-sfn-stats, [class*="sfn-stats"], .html5-video-info-panel, [class*="video-info-panel"]');
+                if (sfnPanel) {
+                    var cs = window.getComputedStyle(sfnPanel);
+                    if (cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity) > 0)
+                        return true;
+                }
+                var labelEls = document.querySelectorAll(
+                    '.ytp-sfn-label, [class*="sfn-label"], [class*="sfn"][class*="label"]');
+                for (var i = 0; i < labelEls.length; i++) {
+                    var cs2 = window.getComputedStyle(labelEls[i]);
+                    if (cs2.display !== 'none' && cs2.visibility !== 'hidden') return true;
+                }
+                return false;
+                """);
+            if (Boolean.TRUE.equals(isOpen)) {
+                logger.info("[Tab-{}] Stats for Nerds panel opened via JS", tabIndex);
+                return;
+            }
+        } catch (Exception e) {
+            logger.debug("[Tab-{}] SFN JS toggle error: {}", tabIndex, e.getMessage());
+        }
+
+        // ── Attempt 2: Right-click context menu ──────────────────────────────
+        try {
+            WebElement player = driver.findElement(By.id("movie_player"));
+            new Actions(driver).contextClick(player).perform();
+            Thread.sleep(600);
+
+            // The context menu items all have class ytp-menuitem
+            WebElement statsItem = new FluentWait<>(driver)
+                .withTimeout(Duration.ofSeconds(3))
+                .pollingEvery(Duration.ofMillis(200))
+                .ignoring(NoSuchElementException.class)
+                .until(d -> {
+                    List<WebElement> items = d.findElements(
+                        By.cssSelector(".ytp-contextmenu .ytp-menuitem-label," +
+                                       ".ytp-contextmenu .ytp-menuitem"));
+                    return items.stream()
+                        .filter(el -> el.getText().toLowerCase().contains("stats for nerds"))
+                        .findFirst()
+                        .orElse(null);
+                });
+
+            if (statsItem != null) {
+                statsItem.click();
+                Thread.sleep(400);
+                logger.info("[Tab-{}] Stats for Nerds opened via right-click menu", tabIndex);
+            } else {
+                logger.debug("[Tab-{}] 'Stats for nerds' item not found in context menu", tabIndex);
+                // Dismiss the context menu by pressing Escape
+                ((JavascriptExecutor) driver).executeScript(
+                    "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',keyCode:27,bubbles:true}));");
+            }
+        } catch (Exception e) {
+            logger.debug("[Tab-{}] SFN right-click approach (non-fatal): {}", tabIndex, e.getMessage());
+        }
+    }
+
+    /**
+     * Reads the current values from YouTube's "Stats for Nerds" overlay panel
+     * and returns them as a {@link StatsForNerdsData} snapshot.
+     *
+     * <p>The panel must have been opened by {@link #openStatsForNerds} first.
+     * If the panel is not present or no fields can be parsed the returned object
+     * satisfies {@code !sfn.isAvailable()}.</p>
+     *
+     * <p>The JavaScript reads every {@code <tr>} row in the panel, mapping the
+     * {@code .ytp-sfn-label} text to the {@code .ytp-sfn-value} text.  Known
+     * rows handled:</p>
+     * <ul>
+     *   <li>{@code "Connection Speed"} — e.g. {@code "8765 Kbps"}</li>
+     *   <li>{@code "Network Activity"} — e.g. {@code "85532 KB"}</li>
+     *   <li>{@code "Buffer Health"}    — e.g. {@code "30.94 s"}</li>
+     *   <li>{@code "Current / Optimal Res"} — e.g. {@code "1920x1080@60 / 1920x1080@60"}</li>
+     *   <li>{@code "Codecs"}           — e.g. {@code "av01.0.13M.08 / opus"}</li>
+     *   <li>{@code "Frames"}           — e.g. {@code "875 / 8"}</li>
+     * </ul>
+     *
+     * @param driver the active Chrome session (already switched to the target tab)
+     * @return a populated {@code StatsForNerdsData}; fields are -1/null when absent
+     */
+    StatsForNerdsData readStatsForNerds(WebDriver driver) {
+        StatsForNerdsData sfn = new StatsForNerdsData();
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, String> panelRows = (Map<String, String>)
+                ((JavascriptExecutor) driver).executeScript("""
+                    var result = {};
+
+                    // Strategy 1: direct label/value class search — works regardless of the
+                    // panel container class (YouTube may wrap it in a generic ytp-panel div).
+                    var labelEls = document.querySelectorAll(
+                        '.ytp-sfn-label, [class*="sfn-label"], [class*="sfn"][class*="label"]');
+                    labelEls.forEach(function(labelEl) {
+                        var row = labelEl.closest('tr') || labelEl.parentElement;
+                        var valueEl = row ? (row.querySelector(
+                            '.ytp-sfn-value, [class*="sfn-value"], [class*="sfn"][class*="value"]')
+                            || labelEl.nextElementSibling) : null;
+                        if (valueEl) {
+                            result[labelEl.textContent.trim()] = valueEl.textContent.trim();
+                        }
+                    });
+                    if (Object.keys(result).length > 0) return result;
+
+                    // Strategy 2: XPath text-content search for well-known SFN row labels.
+                    // This is completely independent of CSS class names.
+                    var knownLabels = [
+                        'Connection Speed', 'Buffer Health', 'Network Activity',
+                        'Current / Optimal Res', 'Codecs', 'Frames', 'Viewport / Frames'
+                    ];
+                    knownLabels.forEach(function(name) {
+                        var xr = document.evaluate(
+                            "//*[normalize-space(text())='" + name + "']",
+                            document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                        var labelNode = xr.singleNodeValue;
+                        if (labelNode) {
+                            var valueNode = labelNode.nextElementSibling ||
+                                (labelNode.parentElement
+                                    ? labelNode.parentElement.nextElementSibling : null);
+                            if (valueNode) result[name] = valueNode.textContent.trim();
+                        }
+                    });
+                    if (Object.keys(result).length > 0) return result;
+
+                    // Strategy 3: panel-container search using multiple known class patterns,
+                    // skipping visibility gate since we just opened the panel moments ago.
+                    var panelSels = [
+                        '.ytp-sfn-stats',
+                        '.html5-video-info-panel',
+                        '[class*="sfn-stats"]',
+                        '[class*="sfn"]',
+                        '[class*="video-info-panel"]'
+                    ];
+                    var panel = null;
+                    for (var si = 0; si < panelSels.length; si++) {
+                        panel = document.querySelector(panelSels[si]);
+                        if (panel) break;
+                    }
+                    if (panel) {
+                        // Try structured tr rows first
+                        panel.querySelectorAll('tr').forEach(function(row) {
+                            var cells = row.querySelectorAll('td, th');
+                            if (cells.length >= 2) {
+                                result[cells[0].textContent.trim()] = cells[1].textContent.trim();
+                            }
+                        });
+                        // Fallback: consecutive non-empty leaf-text pairs
+                        if (Object.keys(result).length === 0) {
+                            var leaves = panel.querySelectorAll('td, th, span');
+                            var prev = null;
+                            leaves.forEach(function(el) {
+                                if (el.children.length > 0) return; // skip non-leaf
+                                var txt = el.textContent.trim();
+                                if (!txt) return;
+                                if (prev !== null) { result[prev] = txt; prev = null; }
+                                else { prev = txt; }
+                            });
+                        }
+                    }
+                    return Object.keys(result).length > 0 ? result : null;
+                    """);
+
+            logger.debug("readStatsForNerds raw JS result: {}", panelRows);
+            if (panelRows == null || panelRows.isEmpty()) return sfn;
+
+            panelRows.forEach((label, value) -> {
+                String lc = label.toLowerCase();
+                if (lc.contains("connection speed")) {
+                    sfn.setConnectionSpeedKbps(parseFirstNumber(value));
+                } else if (lc.contains("network activity")) {
+                    long kb = (long) parseFirstNumber(value);
+                    if (kb >= 0) sfn.setNetworkActivityKB(kb);
+                } else if (lc.contains("buffer health")) {
+                    sfn.setBufferHealthSecs(parseFirstNumber(value));
+                } else if (lc.contains("current") && lc.contains("res")) {
+                    // "Current / Optimal Res" → "1920x1080@60 / 1920x1080@60"
+                    String[] parts = value.split("/", 2);
+                    sfn.setCurrentResolution(parts[0].trim());
+                    if (parts.length > 1) sfn.setOptimalResolution(parts[1].trim());
+                } else if (lc.equals("codecs")) {
+                    // "av01.0.13M.08 / opus"
+                    String[] parts = value.split("/", 2);
+                    sfn.setVideoCodec(parts[0].trim());
+                    if (parts.length > 1) sfn.setAudioCodec(parts[1].trim());
+                } else if (lc.contains("frames") && !lc.contains("viewport")) {
+                    // "875 / 8" or "875 / 8 at 60fps"
+                    Pattern fp = Pattern.compile("(\\d+)\\s*/\\s*(\\d+)");
+                    Matcher fm = fp.matcher(value);
+                    if (fm.find()) {
+                        sfn.setTotalFrames(Long.parseLong(fm.group(1)));
+                        sfn.setDroppedFrames(Long.parseLong(fm.group(2)));
+                    }
+                } else if (lc.contains("viewport") && lc.contains("frames")) {
+                    String[] parts = value.split("/");
+                    if (parts.length >= 3) {
+                        // Older YouTube format: "1920x1080 / 875 / 8" (viewport / total / dropped)
+                        try {
+                            sfn.setTotalFrames(Long.parseLong(parts[1].trim()));
+                            sfn.setDroppedFrames(Long.parseLong(parts[2].trim().split("\\s")[0]));
+                        } catch (NumberFormatException ignored) {}
+                    } else if (parts.length == 2) {
+                        // Newer YouTube format: "808x455 / 1821 dropped of 15580"
+                        Matcher vfm = Pattern.compile("(\\d+)\\s+dropped\\s+of\\s+(\\d+)",
+                            Pattern.CASE_INSENSITIVE).matcher(parts[1]);
+                        if (vfm.find()) {
+                            sfn.setDroppedFrames(Long.parseLong(vfm.group(1)));
+                            sfn.setTotalFrames(Long.parseLong(vfm.group(2)));
+                        }
+                    }
+                }
+            });
+        } catch (Exception e) {
+            logger.debug("readStatsForNerds error: {}", e.getMessage());
+        }
+        return sfn;
+    }
+
+    /**
+     * Extracts the first numeric value (integer or decimal) from a Stats for Nerds
+     * value string, e.g. {@code "8765 Kbps"} → {@code 8765.0},
+     * {@code "30.94 s"} → {@code 30.94}.
+     *
+     * @param text the raw text from the Stats for Nerds panel cell
+     * @return the first number found, or {@code -1} if none could be parsed
+     */
+    private double parseFirstNumber(String text) {
+        if (text == null) return -1;
+        Matcher m = Pattern.compile("[\\d]+(?:\\.[\\d]+)?").matcher(text);
+        if (m.find()) {
+            try { return Double.parseDouble(m.group()); } catch (NumberFormatException ignored) {}
+        }
+        return -1;
+    }
+
     // ── Live network sampling ─────────────────────────────────────────────────
 
     /**
@@ -832,6 +1318,58 @@ public class YouTubePerformanceTester {
             logger.error("[Tab-{}] Final metrics error: {}", m.getTabIndex(), e.getMessage());
             m.setErrorMessage(e.getMessage());
         }
+    }
+
+    /**
+     * Builds a {@link StatsForNerdsData} from the sweep samples already collected
+     * when the live Stats-for-Nerds panel is unavailable (e.g. the browser process
+     * died mid-run).
+     *
+     * <p>Connection speed and buffer health are averaged across all valid sweep
+     * readings.  Frame counters are taken from the last sweep that reported them.
+     * Resolution data is not available and is left unset, so the SFN Resolution
+     * Match check is skipped for tabs where this path is taken.</p>
+     *
+     * <p>If the sample list is empty or no valid SFN values were recorded during
+     * sweeps, no {@link StatsForNerdsData} is set and the tab keeps its current
+     * (possibly {@code null}) SFN state.</p>
+     *
+     * @param m        the metrics object to update
+     * @param samples  per-sweep samples for this tab
+     * @param tabIndex 1-based tab number (for logging only)
+     */
+    private void synthesizeSfnFromSweeps(VideoMetrics m, List<NetworkSample> samples, int tabIndex) {
+        // Only synthesize when live SFN data was not already captured.
+        if (m.getSfnData() != null && m.getSfnData().isAvailable()) return;
+        if (samples == null || samples.isEmpty()) return;
+
+        OptionalDouble avgConnSpeed = samples.stream()
+            .filter(s -> s.getConnectionSpeedKbps() > 0)
+            .mapToDouble(NetworkSample::getConnectionSpeedKbps)
+            .average();
+        OptionalDouble avgBufHealth = samples.stream()
+            .filter(s -> s.getBufferHealthSecs() >= 0)
+            .mapToDouble(NetworkSample::getBufferHealthSecs)
+            .average();
+
+        if (avgConnSpeed.isEmpty() && avgBufHealth.isEmpty()) return;
+
+        StatsForNerdsData sfn = new StatsForNerdsData();
+        avgConnSpeed.ifPresent(sfn::setConnectionSpeedKbps);
+        avgBufHealth.ifPresent(sfn::setBufferHealthSecs);
+        // Take cumulative frame counters from the last sweep that reported them.
+        samples.stream()
+            .filter(s -> s.getDroppedFrames() >= 0)
+            .reduce((a, b) -> b)
+            .ifPresent(s -> {
+                sfn.setDroppedFrames(s.getDroppedFrames());
+                sfn.setTotalFrames(s.getTotalFrames());
+            });
+        m.setSfnData(sfn);
+        logger.info("[Tab-{}] SFN synthesized from sweep data: speed(avg)={} Kbps, bufHealth(avg)={} s",
+            tabIndex,
+            avgConnSpeed.isPresent() ? String.format("%.0f", avgConnSpeed.getAsDouble()) : "n/a",
+            avgBufHealth.isPresent() ? String.format("%.2f", avgBufHealth.getAsDouble()) : "n/a");
     }
 
     /**

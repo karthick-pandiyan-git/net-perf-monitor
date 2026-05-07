@@ -49,8 +49,9 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
 
     private final List<String> urls;
     private final CountDownLatch startLatch;
-    /** Epoch-ms at which the measurement loop must stop. */
-    private final long absoluteDeadlineMs;
+    /** Epoch-ms at which the measurement loop must stop. Reset after latch sync. */
+    private long absoluteDeadlineMs;
+    private final int durationSeconds;
     /** Drop a tab only if it fails every cycle — gives transient outages a fair chance. */
     private final int maxConsecutiveFailures;
     /**
@@ -77,7 +78,8 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
         // Absolute deadline: programStartMs + durationSeconds.
         // Setup time (tab open + cold loads) is consumed from the budget, so total
         // wall-clock time equals durationSeconds regardless of how long setup takes.
-        this.absoluteDeadlineMs     = programStartMs + durationSeconds * 1000L;
+        this.absoluteDeadlineMs     = programStartMs + durationSeconds * 1000L; // fallback; reset after latch
+        this.durationSeconds        = durationSeconds;
         this.maxConsecutiveFailures = Math.max(1, durationSeconds / (CYCLE_INTERVAL_MS / 1000));
         this.liveResults            = liveResults;
     }
@@ -111,11 +113,14 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
                 startLatch.countDown();
             }
             startLatch.await(5, TimeUnit.MINUTES);
+            // Reset the deadline NOW — after all probes are synced and tabs are open.
+            // Tab setup (cold loads) can take 15-30 s; using programStartMs as the
+            // origin causes the cycle loop to get fewer iterations than expected.
+            absoluteDeadlineMs = System.currentTimeMillis() + (long) durationSeconds * 1000L;
             // Switch from the generous cold-load timeout used during tab setup to
             // the shorter warm-cycle timeout now that connections are established.
             driver.manage().timeouts().pageLoadTimeout(Duration.ofSeconds(PAGE_LOAD_TIMEOUT_SECS));
-            logger.info("[WebsiteTester] All probes ready \u2014 {} s remaining in budget",
-                Math.max(0, (absoluteDeadlineMs - System.currentTimeMillis()) / 1000));
+            logger.info("[WebsiteTester] All probes ready \u2014 monitoring for {} s", durationSeconds);
             // Consecutive failure counter per tab. Incremented on navigation failure,
             // reset on success. When it reaches maxConsecutiveFailures the handle
             // is nulled so we stop wasting cycle time on a chronically-failing site.
@@ -226,6 +231,9 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
         options.addArguments("--disable-renderer-backgrounding");
         options.addArguments("--disable-background-timer-throttling");
         options.addArguments("--disable-backgrounding-occluded-windows");
+        // Suppress ChromeDriver DevTools discovery logs (CDP version mismatch warnings)
+        options.addArguments("--log-level=3");
+        options.addArguments("--silent");
         options.addArguments(
             "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -254,46 +262,81 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
     private List<String> openAllTabs(WebDriver driver, List<String> urls) throws InterruptedException {
         List<String> handles = new ArrayList<>();
 
-        for (int i = 0; i < urls.size(); i++) {
+        // ── Phase 1: Launch all tabs directly at their target URLs ───────────────
+        // Tab 1 already exists — navigate it via window.location.href (non-blocking).
+        // Tabs 2..N are opened with window.open(url, '_blank') which tells Chrome to
+        // start loading the real URL immediately — no about:blank intermediate step.
+        try {
+            handles.add(driver.getWindowHandle());
+            ((JavascriptExecutor) driver).executeScript(
+                "window.location.href = arguments[0];", urls.get(0));
+            logger.info("[WebsiteTester] Triggered navigation tab 1: {}", urls.get(0));
+        } catch (Exception e) {
+            logger.warn("[WebsiteTester] Tab 1 failed to start navigation, will retry each cycle: {}", e.getMessage());
+        }
+
+        for (int i = 1; i < urls.size(); i++) {
             try {
-                if (i == 0) {
-                    driver.get(urls.get(i));
-                    handles.add(driver.getWindowHandle());
-                } else {
-                    ((JavascriptExecutor) driver).executeScript("window.open('about:blank', '_blank');");
-                    Set<String> all = driver.getWindowHandles();
-                    String newHandle = all.stream()
-                        .filter(h -> !handles.contains(h))
-                        .findFirst()
-                        .orElseThrow(() -> new IllegalStateException("New tab handle not found"));
-                    handles.add(newHandle);
-                    driver.switchTo().window(newHandle);
-                    driver.get(urls.get(i));
-                }
-                logger.info("[WebsiteTester] Opened tab {}: {}", i + 1, urls.get(i));
+                // Pass the real URL to window.open so Chrome begins the fetch right away.
+                ((JavascriptExecutor) driver).executeScript(
+                    "window.open(arguments[0], '_blank');", urls.get(i));
+                Set<String> all = driver.getWindowHandles();
+                final int tabIdx = i;
+                String newHandle = all.stream()
+                    .filter(h -> !handles.contains(h))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException("New tab handle not found for URL " + tabIdx));
+                handles.add(newHandle);
+                logger.info("[WebsiteTester] Triggered navigation tab {}: {}", i + 1, urls.get(i));
             } catch (Exception e) {
-                // Tab failed to open (e.g. internet was down). Log the failure but
-                // KEEP the window handle so each measurement cycle can retry the
-                // navigation — when internet is restored mid-test the cycle will
-                // succeed. Only permanently drop the tab (null the handle) after
-                // MAX_CONSECUTIVE_FAILURES cycles have failed in a row.
-                logger.warn("[WebsiteTester] Tab {} failed to open ({}), will retry each cycle: {}",
+                logger.warn("[WebsiteTester] Tab {} ({}) failed to open, will retry each cycle: {}",
                     i + 1, urls.get(i), e.getMessage());
-                // For i=0, driver.get() throws before handles.add(), so we must add
-                // the handle now. For i>0 the handle was already added before driver.get().
-                if (handles.size() <= i) {
-                    try {
-                        handles.add(driver.getWindowHandle());
-                    } catch (Exception ignored) {
-                        handles.add(null); // no window at all — truly unrecoverable
-                    }
-                }
-                // Park on about:blank to release the renderer immediately.
-                try { ((JavascriptExecutor) driver).executeScript("window.stop();"); } catch (Exception ignored) {}
-                try { driver.navigate().to("about:blank"); } catch (Exception ignored) {}
+                handles.add(null);
             }
+        }
+
+        // ── Phase 2: Wait for all tabs to reach readyState='complete' ────────────
+        // All tabs are already loading their real URLs in parallel — just poll until
+        // every tab reports 'complete'.  A short initial pause lets Chrome register
+        // the navigations as 'loading' before the first readyState check so we don't
+        // accidentally read a stale 'complete' from the previous page.
+        Thread.sleep(500);
+
+        long deadline = System.currentTimeMillis() + (long) PAGE_LOAD_TIMEOUT_COLD_SECS * 1000L;
+        boolean[] loaded = new boolean[handles.size()];
+        while (System.currentTimeMillis() < deadline) {
+            boolean allDone = true;
+            for (int i = 0; i < handles.size(); i++) {
+                if (loaded[i] || handles.get(i) == null) continue;
+                try {
+                    driver.switchTo().window(handles.get(i));
+                    String state = (String) ((JavascriptExecutor) driver)
+                        .executeScript("return document.readyState;");
+                    String currentUrl = driver.getCurrentUrl();
+                    // Confirm the tab has navigated to the real URL, not a stale page.
+                    boolean urlMatched = currentUrl != null && !currentUrl.startsWith("about:");
+                    if ("complete".equals(state) && urlMatched) {
+                        loaded[i] = true;
+                        logger.info("[WebsiteTester] Tab {} ready: {}", i + 1, urls.get(i));
+                    } else {
+                        allDone = false;
+                    }
+                } catch (Exception e) {
+                    // Tab unresponsive mid-load — stop polling and let cycles retry.
+                    logger.warn("[WebsiteTester] Tab {} unresponsive during load check: {}", i + 1, e.getMessage());
+                    loaded[i] = true;
+                }
+            }
+            if (allDone) break;
             Thread.sleep(500);
         }
+        for (int i = 0; i < handles.size(); i++) {
+            if (!loaded[i] && handles.get(i) != null) {
+                logger.warn("[WebsiteTester] Tab {} ({}) did not finish initial load within {}s — continuing",
+                    i + 1, urls.get(i), PAGE_LOAD_TIMEOUT_COLD_SECS);
+            }
+        }
+
         return handles;
     }
 

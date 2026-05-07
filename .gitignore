@@ -8,6 +8,8 @@ target/
 # Captured run logs
 runs/
 test_output*.txt
+exec_log*.txt
+verify_output*.txt
 
 # IDE and OS files
 .idea/

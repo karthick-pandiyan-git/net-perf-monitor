@@ -4,6 +4,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.LongSummaryStatistics;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -20,23 +21,15 @@ import java.util.stream.Stream;
 public class WebsiteReporter {
 
     // Thresholds used for inline PASS/FAIL annotation
-    private static final long THRESHOLD_PAGE_LOAD_MS      = 5_000;
-    /**
-     * Cold page load threshold for website cycle 1.
-     * The first navigation after the browser opens tabs has no browser cache,
-     * requires new TCP/TLS connections, and contends with YouTube setup.
-     * Cycles 2+ use THRESHOLD_PAGE_LOAD_MS.
-     */
-    private static final long THRESHOLD_PAGE_LOAD_COLD_MS = 8_000;
-    /**
-     * Cold TTFB threshold for website cycle 1.
-     * The first visit has no open HTTP/2 connection to the site, so TTFB
-     * includes a full TCP + TLS handshake. Cycles 2+ reuse the connection.
-     */
-    private static final long THRESHOLD_TTFB_COLD_MS      = 2_000;
-    private static final long THRESHOLD_TTFB_MS           = 1_200;
-    private static final long THRESHOLD_DCL_MS            = 4_000;
-    private static final long THRESHOLD_DNS_LOOKUP_MS     = 200;
+    /** Returns the applicable thresholds for a given domain. */
+    private final Function<String, WebsiteThresholds> thresholdsFor;
+
+    private static final long THRESHOLD_DCL_MS         = 4_000;
+    private static final long THRESHOLD_DNS_LOOKUP_MS  = 200;
+
+    public WebsiteReporter(Function<String, WebsiteThresholds> thresholdsFor) {
+        this.thresholdsFor = thresholdsFor;
+    }
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -48,9 +41,11 @@ public class WebsiteReporter {
      * @param metrics all collected {@link WebsiteMetrics} records
      */
     public void printWebsiteReport(List<WebsiteMetrics> metrics) {
+        int totalCycles = metrics.isEmpty() ? 0
+            : metrics.stream().mapToInt(WebsiteMetrics::getRefreshCycle).max().orElse(0);
         System.out.println();
         System.out.println("══════════════════════════════════════════════════════════════════════════");
-        System.out.println("                    WEBSITE PERFORMANCE REPORT  (6 refresh cycles × 5 s)");
+        System.out.printf( "                    WEBSITE PERFORMANCE REPORT  (%d refresh cycles × 5 s)%n", totalCycles);
         System.out.println("══════════════════════════════════════════════════════════════════════════");
 
         Map<Integer, List<WebsiteMetrics>> byTab = metrics.stream()
@@ -82,9 +77,9 @@ public class WebsiteReporter {
                 Collectors.groupingBy(DnsResult::getRecordType)
             ));
 
-        System.out.printf("  %-25s  %-6s  %7s  %7s  %8s  %8s  %8s%n",
-            "Domain", "Type", "Rounds", "Success", "Avg(ms)", "Min(ms)", "Max(ms)");
-        System.out.println("  " + "─".repeat(80));
+        System.out.printf("  %-25s  %-6s  %7s  %7s  %8s  %8s  %8s  %8s%n",
+            "Domain", "Type", "Rounds", "Success", "Avg(ms)", "Min(ms)", "Max(ms)", "Stddev");
+        System.out.println("  " + "─".repeat(90));
 
         byDomainAndType.entrySet().stream()
             .sorted(Map.Entry.comparingByKey())
@@ -105,7 +100,8 @@ public class WebsiteReporter {
      *
      * @param tabIndex   the 1-based tab number
      * @param tabMetrics all metrics records for this tab, unsorted
-     */    private void printTabSection(int tabIndex, List<WebsiteMetrics> tabMetrics) {
+     */
+    private void printTabSection(int tabIndex, List<WebsiteMetrics> tabMetrics) {
         String domain = tabMetrics.isEmpty() ? "?" : tabMetrics.get(0).getDomain();
         String title  = tabMetrics.stream()
             .filter(m -> m.getPageTitle() != null && !m.getPageTitle().isBlank())
@@ -124,15 +120,17 @@ public class WebsiteReporter {
             .sorted(Comparator.comparingInt(WebsiteMetrics::getRefreshCycle))
             .toList();
 
+        WebsiteThresholds thr = thresholdsFor.apply(domain);
         for (WebsiteMetrics m : sorted) {
             if (!m.isSuccess()) {
                 System.out.printf("  %-6d  %-14s%n", m.getRefreshCycle(), "ERROR: " + truncate(m.getErrorMessage(), 70));
                 continue;
             }
+            boolean isCold = m.getRefreshCycle() == 1;
             System.out.printf("  %-6d  %s  %s  %s  %s  %s%n",
                 m.getRefreshCycle(),
-                msCell(m.getPageLoadTime(),     THRESHOLD_PAGE_LOAD_MS),
-                msCell(m.getTimeToFirstByte(),  THRESHOLD_TTFB_MS),
+                msCell(m.getPageLoadTime(),     isCold ? thr.pageLoadColdMs : thr.pageLoadWarmMs),
+                msCell(m.getTimeToFirstByte(),  isCold ? thr.ttfbColdMs     : thr.ttfbWarmMs),
                 msCell(m.getDomContentLoaded(), THRESHOLD_DCL_MS),
                 msCell(m.getDnsLookupTime(),    THRESHOLD_DNS_LOOKUP_MS),
                 plain(m.getTcpConnectionTime()));
@@ -145,6 +143,35 @@ public class WebsiteReporter {
             "AVG",
             fmtMs(avgs[0]), fmtMs(avgs[1]), fmtMs(avgs[2]),
             fmtMs(avgs[3]), fmtMs(avgs[4]));
+
+        // Statistics row (mean ± σ + outlier count)
+        List<Double> loadValues = sorted.stream().filter(WebsiteMetrics::isSuccess)
+            .map(m -> (double) m.getPageLoadTime()).filter(v -> v >= 0).collect(Collectors.toList());
+        List<Double> ttfbValues = sorted.stream().filter(WebsiteMetrics::isSuccess)
+            .map(m -> (double) m.getTimeToFirstByte()).filter(v -> v >= 0).collect(Collectors.toList());
+
+        StatisticsEngine.Stats loadStats = StatisticsEngine.compute(loadValues);
+        StatisticsEngine.Stats ttfbStats = StatisticsEngine.compute(ttfbValues);
+
+        if (loadStats != null || ttfbStats != null) {
+            String loadStat = loadStats != null
+                ? String.format("μ=%.0f ±σ%.0f ms", loadStats.mean, loadStats.stddev)
+                : "n/a";
+            String ttfbStat = ttfbStats != null
+                ? String.format("μ=%.0f ±σ%.0f ms", ttfbStats.mean, ttfbStats.stddev)
+                : "n/a";
+            long loadOutliers = StatisticsEngine.countHighOutliers(loadValues, loadStats);
+            long ttfbOutliers = StatisticsEngine.countHighOutliers(ttfbValues, ttfbStats);
+            String outlierNote = "";
+            if (loadOutliers > 0 || ttfbOutliers > 0)
+                outlierNote = String.format("  ⚠ outliers: %d load  %d TTFB  (>μ+%sσ)",
+                    loadOutliers, ttfbOutliers,
+                    (loadStats != null && loadStats.isReliable()) ? "2" : "3");
+            System.out.printf("  %-6s  %-14s  %-12s%s%n",
+                "STAT", loadStat, ttfbStat, outlierNote);
+            if (loadStats != null && !loadStats.isReliable())
+                System.out.println("         (limited samples — σ-gate widened to 3σ to reduce false positives)");
+        }
         System.out.println();
     }
 
@@ -184,7 +211,13 @@ public class WebsiteReporter {
         return String.format("%-12s", value < 0 ? "N/A" : value + " ms");
     }
 
-    /** Computes averages [pageLoad, ttfb, dcl, dns, tcp] over successful cycles. */
+    /**
+     * Computes per-metric averages over the successful cycles in {@code list}.
+     *
+     * @param list all {@link WebsiteMetrics} records for one tab (may include failures)
+     * @return a 5-element array: {@code [pageLoad, ttfb, dcl, dnsLookup, tcpConnect]}
+     *         in milliseconds; any metric with no valid readings is set to {@code -1}
+     */
     private long[] averages(List<WebsiteMetrics> list) {
         List<WebsiteMetrics> ok = list.stream().filter(WebsiteMetrics::isSuccess).toList();
         if (ok.isEmpty()) return new long[]{-1, -1, -1, -1, -1};
@@ -200,10 +233,9 @@ public class WebsiteReporter {
     // ── DNS section helpers ───────────────────────────────────────────────────
 
     /**
-     * Prints a single aggregate summary row for one (domain, tool) combination
+     * Prints a single aggregate summary row for one (domain, record type) combination
      * in the DNS monitoring report.
      *
-     * @param domain the fully-qualified domain queried
      * @param domain     the domain name (e.g. {@code "google.com"})
      * @param recordType the DNS record type: {@code "A"} (IPv4) or {@code "AAAA"} (IPv6)
      * @param rows       all {@link DnsResult} records for this domain and record type
@@ -230,26 +262,31 @@ public class WebsiteReporter {
             .mapToLong(DnsResult::getResponseTimeMs)
             .summaryStatistics();
 
-        System.out.printf("  %-25s  %-6s  %7d  %6.0f%%  %8.0f  %8d  %8d%n",
+        // Statistical analysis of response-time distribution
+        List<Double> rtValues = succeeded.stream()
+            .map(r -> (double) r.getResponseTimeMs()).collect(Collectors.toList());
+        StatisticsEngine.Stats rtStats = StatisticsEngine.compute(rtValues);
+        long spikeCount = StatisticsEngine.countHighOutliers(rtValues, rtStats);
+        String spikeNote = (spikeCount > 0)
+            ? String.format("  ⚠ %d spike%s>μ+%sσ", spikeCount, spikeCount > 1 ? "s" : "",
+                (rtStats != null && rtStats.isReliable() ? "2" : "3"))
+            : "";
+        String stddevStr = (rtStats != null)
+            ? String.format("σ=%.0f", rtStats.stddev)
+            : "";
+
+        System.out.printf("  %-25s  %-6s  %7d  %6.0f%%  %8.0f  %8d  %8d  %8s%s%n",
             domain, recordType, total, pct,
-            stats.getAverage(), stats.getMin(), stats.getMax());
+            stats.getAverage(), stats.getMin(), stats.getMax(), stddevStr, spikeNote);
     }
 
-    // ── Final summary PASS/FAIL ─────────────────────────────────────────────
-
-    /**
-     * Prints a compact combined PASS/FAIL summary for website loading and DNS
-     * queries. Called after all detail reports have been printed.
-     *
-     * Website criteria  — PASS if: success rate ≥ 80%
-     *                               AND avg page load ≤ 5000 ms
-     *                               AND avg TTFB ≤ 1200 ms
-     * DNS criteria      — PASS if: success rate ≥ 80%
-     *                               AND avg response time ≤ 1000 ms
-     */
     /**
      * Prints the combined FINAL REPORT covering YouTube videos, website
      * performance, and DNS monitoring.
+     *
+     * <p>Each section is omitted when its probe was not active in the current run.
+     * Website and DNS sections include per-cycle PASS/FAIL rows and overall
+     * success-rate summaries.</p>
      *
      * @param ytVerdicts  per-video PASS/FAIL verdicts (may be null/empty)
      * @param webMetrics  website refresh-cycle metrics  (may be null/empty)
@@ -270,10 +307,11 @@ public class WebsiteReporter {
         if (ytVerdicts != null) {
             System.out.println();
             System.out.println("  ╔══ YOUTUBE VIDEO PERFORMANCE ══════════════════════════════════════════");
-            System.out.println("  ║  Internet checks per video (7 total):");
-            System.out.println("  ║    DNS Lookup ≤ 200 ms  │  TCP RTT ≤ 200 ms  │  TTFB ≤ 3000 ms (cold) / 1500 ms (warm)");
-            System.out.println("  ║    Page Load ≤ 15000 ms (cold) / 12000 ms (warm)  │  Buffer ≥ 10 s  │  Avg BW ≥ 250 KB/s");
-            System.out.println("  ║    Quality Stability: video must not be downgraded by YouTube's ABR during playback");
+            System.out.println("  ║  Internet checks per video (5 core + up to 3 Stats for Nerds + up to 2 statistical):");
+            System.out.println("  ║    TTFB ≤ 3000 ms (cold) / 1500 ms (warm)  │  Page Load ≤ 15000 ms (cold) / 12000 ms (warm)");
+            System.out.println("  ║    Buffer ≥ 10 s  │  Avg BW ≥ 250 KB/s  │  Quality Stability: no ABR downgrade during playback");
+            System.out.println("  ║    Stats for Nerds (when available): SFN Connection Speed ≥ 2500 Kbps  │  SFN Buffer Health ≥ 10 s  │  SFN Resolution match");
+            System.out.println("  ║    Statistical: Buffer Depth Consistency (μ−1σ ≥ 10 s)  │  Frame Drop (Catastrophic): no 100% drop sweep");
             System.out.println("  ╚═══════════════════════════════════════════════════════════════════════");
             System.out.printf("  %-5s  %-45s  %-18s  %8s  %6s  %s%n",
                 "Tab", "Video Title", "Quality", "Checks", "Status", "Failed checks");
@@ -318,10 +356,11 @@ public class WebsiteReporter {
         if (webMetrics != null) {
             System.out.println();
             System.out.println("  ╔══ WEBSITE PERFORMANCE ════════════════════════════════════════════════");
-            System.out.printf("  ║  Thresholds — warm (cycles 2+): Page Load ≤ %d ms │ TTFB ≤ %d ms%n",
-                THRESHOLD_PAGE_LOAD_MS, THRESHOLD_TTFB_MS);
-            System.out.printf("  ║  Thresholds — cold (cycle 1):   Page Load ≤ %d ms │ TTFB ≤ %d ms  (no cache, new TCP+TLS)%n",
-                THRESHOLD_PAGE_LOAD_COLD_MS, THRESHOLD_TTFB_COLD_MS);
+            WebsiteThresholds def = thresholdsFor.apply(null);
+            System.out.printf("  ║  Thresholds (defaults) — warm (cycles 2+): Page Load ≤ %d ms │ TTFB ≤ %d ms  (per-site overrides may apply)%n",
+                def.pageLoadWarmMs, def.ttfbWarmMs);
+            System.out.printf("  ║  Thresholds (defaults) — cold (cycle 1):   Page Load ≤ %d ms │ TTFB ≤ %d ms  (no cache, new TCP+TLS)%n",
+                def.pageLoadColdMs, def.ttfbColdMs);
             System.out.println("  ╚═══════════════════════════════════════════════════════════════════════");
             System.out.printf("  %-22s  %5s  %12s  %10s  %10s  %-8s  %s%n",
                 "Domain", "Cycle", "Page Load", "TTFB", "DCL", "Status", "Reason");
@@ -479,8 +518,9 @@ public class WebsiteReporter {
     private boolean websiteCyclePasses(WebsiteMetrics m) {
         if (!m.isSuccess()) return false;
         // Cycle 1 is a cold load (no browser cache) — apply more lenient thresholds.
-        long loadLimit = (m.getRefreshCycle() == 1) ? THRESHOLD_PAGE_LOAD_COLD_MS : THRESHOLD_PAGE_LOAD_MS;
-        long ttfbLimit = (m.getRefreshCycle() == 1) ? THRESHOLD_TTFB_COLD_MS      : THRESHOLD_TTFB_MS;
+        WebsiteThresholds thr = thresholdsFor.apply(m.getDomain());
+        long loadLimit = (m.getRefreshCycle() == 1) ? thr.pageLoadColdMs : thr.pageLoadWarmMs;
+        long ttfbLimit = (m.getRefreshCycle() == 1) ? thr.ttfbColdMs     : thr.ttfbWarmMs;
         boolean loadOk = m.getPageLoadTime() >= 0 && m.getPageLoadTime() <= loadLimit;
         boolean ttfbOk = m.getTimeToFirstByte() >= 0 && m.getTimeToFirstByte() <= ttfbLimit;
         return loadOk && ttfbOk;
@@ -500,22 +540,23 @@ public class WebsiteReporter {
             return reasons;
         }
         boolean isCold = (m.getRefreshCycle() == 1);
+        WebsiteThresholds thr = thresholdsFor.apply(m.getDomain());
         if (isCold) {
             // Always note cold-start for cycle 1 so the reader understands why a
             // high TTFB or page load still passes: relaxed thresholds apply here.
-            reasons.add("cold start (TTFB ≤ " + THRESHOLD_TTFB_COLD_MS + " ms, load ≤ " + THRESHOLD_PAGE_LOAD_COLD_MS + " ms)");
+            reasons.add("cold start (TTFB ≤ " + thr.ttfbColdMs + " ms, load ≤ " + thr.pageLoadColdMs + " ms)");
         }
         if (m.getPageLoadTime() < 0) {
             reasons.add("pageLoad N/A");
         } else {
-            long loadLimit = isCold ? THRESHOLD_PAGE_LOAD_COLD_MS : THRESHOLD_PAGE_LOAD_MS;
+            long loadLimit = isCold ? thr.pageLoadColdMs : thr.pageLoadWarmMs;
             if (m.getPageLoadTime() > loadLimit)
                 reasons.add("pageLoad " + m.getPageLoadTime() + " ms (> " + loadLimit + ")");
         }
         if (m.getTimeToFirstByte() < 0) {
             reasons.add("TTFB N/A");
         } else {
-            long ttfbLimit = isCold ? THRESHOLD_TTFB_COLD_MS : THRESHOLD_TTFB_MS;
+            long ttfbLimit = isCold ? thr.ttfbColdMs : thr.ttfbWarmMs;
             if (m.getTimeToFirstByte() > ttfbLimit)
                 reasons.add("TTFB " + m.getTimeToFirstByte() + " ms (> " + ttfbLimit + ")");
         }

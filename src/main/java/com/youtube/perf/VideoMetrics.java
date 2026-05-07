@@ -11,10 +11,18 @@ import java.util.List;
 public class VideoMetrics {
 
     // ── Identity ─────────────────────────────────────────────────────────────
+    /** 1-based index of this tab within the YouTube performance tester. */
     private int tabIndex;
+    /** Full YouTube video URL opened in this tab. */
     private String url;
+    /** {@code document.title} of the loaded video page (the video title shown in the browser tab). */
     private String pageTitle;
+    /** Epoch-milliseconds when the final metrics snapshot was collected for this tab. */
     private long metricsCollectedAt;   // epoch ms
+    /**
+     * Error description if an exception prevented metrics collection, or {@code null}
+     * when all fields were collected successfully.
+     */
     private String errorMessage;
 
     // ── Page-load timing (all in milliseconds) ────────────────────────────────
@@ -192,21 +200,40 @@ public class VideoMetrics {
         return QUALITY_ORDER.indexOf(label);
     }
 
-    /** Per-sweep quality labels (auto/unknown filtered out). */
+    /** Per-sweep quality labels collected during playback ("auto" and "unknown" values are filtered out). */
     private List<String> qualityHistory = new ArrayList<>();
-    /** Highest quality label seen during playback (e.g. "hd1080"). Null if not available. */
+    /** Highest quality label observed during the monitoring window (e.g. {@code "hd1080"}). {@code null} if quality was never reported as a specific level. */
     private String peakQualityLabel;
-    /** Lowest quality label seen — equals peak when stable, lower when ABR downgraded. */
+    /** Lowest quality label observed — equals {@link #peakQualityLabel} when stable, lower when ABR downgraded quality during playback. */
     private String lowestQualityLabel;
-    /** True if quality was ever downgraded below the peak during the monitoring window. */
+    /** {@code true} if the ABR algorithm downgraded quality below the peak at any point during the window. */
     private boolean qualityDegraded;
 
+    /** Returns the per-sweep quality labels collected during playback ("auto"/"unknown" filtered out). */
     public List<String> getQualityHistory()                           { return qualityHistory; }
+    /** Sets the per-sweep quality history list. */
     public void setQualityHistory(List<String> qualityHistory)        { this.qualityHistory = qualityHistory; }
+    /** Returns the highest quality label observed, or {@code null} when quality was always reported as "auto" or "unknown". */
     public String getPeakQualityLabel()                               { return peakQualityLabel; }
+    /** Sets the peak (highest) quality label observed during the monitoring window. */
     public void setPeakQualityLabel(String peakQualityLabel)          { this.peakQualityLabel = peakQualityLabel; }
+    /** Returns the lowest quality label observed (equals peak when ABR was stable; lower when quality was downgraded). */
     public String getLowestQualityLabel()                             { return lowestQualityLabel; }
+    /** Sets the lowest quality label observed. */
     public void setLowestQualityLabel(String lowestQualityLabel)      { this.lowestQualityLabel = lowestQualityLabel; }
+    /** Returns {@code true} if YouTube's ABR algorithm downgraded quality below the peak at any point during playback. */
     public boolean isQualityDegraded()                                { return qualityDegraded; }
+    /** Sets the quality-degraded flag. */
     public void setQualityDegraded(boolean qualityDegraded)           { this.qualityDegraded = qualityDegraded; }
+
+    // ── Stats for Nerds ──────────────────────────────────────────────────────
+
+    /**
+     * Data scraped from YouTube's "Stats for Nerds" overlay panel.
+     * {@code null} when the panel was not available during this session.
+     */
+    private StatsForNerdsData sfnData;
+
+    public StatsForNerdsData getSfnData()            { return sfnData; }
+    public void setSfnData(StatsForNerdsData sfnData) { this.sfnData = sfnData; }
 }

@@ -98,6 +98,9 @@ public class JsonReporter {
             entry.put("tab",   m.getTabIndex());
             entry.put("url",   m.getUrl());
             entry.put("title", m.getPageTitle());
+            if (m.getMetricsCollectedAt() > 0) {
+                entry.put("timestamp", TS_FMT.format(Instant.ofEpochMilli(m.getMetricsCollectedAt())));
+            }
 
             // Connection / page-load timings
             entry.put("pageLoad_ms",         nullIfNeg(m.getPageLoadTime()));
@@ -120,6 +123,62 @@ public class JsonReporter {
             entry.put("lowestQuality",       m.getLowestQualityLabel());
             entry.put("qualityDegraded",     m.isQualityDegraded());
             entry.put("droppedFrameRate_pct", round2(m.getDroppedFrameRatePct()));
+
+            // Stats for Nerds
+            StatsForNerdsData sfn = m.getSfnData();
+            if (sfn != null && sfn.isAvailable()) {
+                Map<String, Object> sfnMap = new LinkedHashMap<>();
+                if (sfn.getConnectionSpeedKbps() >= 0)
+                    sfnMap.put("connectionSpeed_kbps", round2(sfn.getConnectionSpeedKbps()));
+                if (sfn.getBufferHealthSecs() >= 0)
+                    sfnMap.put("bufferHealth_s",        round2(sfn.getBufferHealthSecs()));
+                if (sfn.getNetworkActivityKB() >= 0)
+                    sfnMap.put("networkActivity_kb",    sfn.getNetworkActivityKB());
+                if (sfn.getCurrentResolution() != null)
+                    sfnMap.put("currentResolution",     sfn.getCurrentResolution());
+                if (sfn.getOptimalResolution() != null)
+                    sfnMap.put("optimalResolution",     sfn.getOptimalResolution());
+                if (sfn.getVideoCodec() != null)
+                    sfnMap.put("videoCodec",            sfn.getVideoCodec());
+                if (sfn.getAudioCodec() != null)
+                    sfnMap.put("audioCodec",            sfn.getAudioCodec());
+                if (sfn.getTotalFrames() >= 0) {
+                    sfnMap.put("totalFrames",   sfn.getTotalFrames());
+                    sfnMap.put("droppedFrames", sfn.getDroppedFrames());
+                    long t = sfn.getTotalFrames();
+                    sfnMap.put("droppedFrameRate_pct",
+                        t > 0 ? round2(100.0 * sfn.getDroppedFrames() / t) : 0.0);
+                }
+                entry.put("statsForNerds", sfnMap);
+            }
+
+            // Per-sweep bandwidth / buffer timeline
+            List<NetworkSample> samples = m.getNetworkSamples();
+            if (samples != null && !samples.isEmpty()) {
+                List<Map<String, Object>> sweeps = new ArrayList<>();
+                for (NetworkSample s : samples) {
+                    Map<String, Object> sw = new LinkedHashMap<>();
+                    sw.put("sweep",       s.getSampleNumber());
+                    sw.put("timestamp",   TS_FMT.format(Instant.ofEpochMilli(s.getTimestamp())));
+                    sw.put("bandwidth_kbps",      round2(s.getBandwidthKBps()));
+                    sw.put("totalData_bytes",      s.getTotalSegmentBytes());
+                    sw.put("recentData_bytes",     s.getRecentSegmentBytes());
+                    sw.put("videoCurrentTime_s",   round2(s.getVideoCurrentTime()));
+                    sw.put("videoBuffered_s",       round2(s.getVideoBuffered()));
+                    sw.put("qualityLabel",          s.getQualityLabel());
+                    if (s.isAdPlaying()) sw.put("adPlaying", true);
+                    if (s.getConnectionSpeedKbps() >= 0)
+                        sw.put("connectionSpeed_kbps", round2(s.getConnectionSpeedKbps()));
+                    if (s.getBufferHealthSecs() >= 0)
+                        sw.put("bufferHealth_s",        round2(s.getBufferHealthSecs()));
+                    if (s.getTotalFrames() >= 0) {
+                        sw.put("totalFrames",   s.getTotalFrames());
+                        sw.put("droppedFrames", s.getDroppedFrames());
+                    }
+                    sweeps.add(sw);
+                }
+                entry.put("sweeps", sweeps);
+            }
 
             if (m.getErrorMessage() != null) {
                 entry.put("error", m.getErrorMessage());

@@ -63,4 +63,24 @@ public class NetworkSample {
 
     public boolean isAdPlaying() { return adPlaying; }
     public void setAdPlaying(boolean adPlaying) { this.adPlaying = adPlaying; }
+
+    /** YouTube Stats for Nerds connection speed (Kbps) read from the SFN panel each sweep. -1 if unavailable. */
+    private double connectionSpeedKbps = -1;
+    public double getConnectionSpeedKbps() { return connectionSpeedKbps; }
+    public void setConnectionSpeedKbps(double connectionSpeedKbps) { this.connectionSpeedKbps = connectionSpeedKbps; }
+
+    /** YouTube Stats for Nerds buffer health (seconds) read from the SFN panel each sweep. -1 if unavailable. */
+    private double bufferHealthSecs = -1;
+    public double getBufferHealthSecs() { return bufferHealthSecs; }
+    public void setBufferHealthSecs(double bufferHealthSecs) { this.bufferHealthSecs = bufferHealthSecs; }
+
+    /** Cumulative dropped frames read from the SFN "Viewport / Frames" row at this sweep. -1 if unavailable. */
+    private long droppedFrames = -1;
+    public long getDroppedFrames() { return droppedFrames; }
+    public void setDroppedFrames(long v) { this.droppedFrames = v; }
+
+    /** Cumulative total frames read from the SFN "Viewport / Frames" row at this sweep. -1 if unavailable. */
+    private long totalFrames = -1;
+    public long getTotalFrames() { return totalFrames; }
+    public void setTotalFrames(long v) { this.totalFrames = v; }
 }

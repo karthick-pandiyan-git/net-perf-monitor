@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.ArrayList;
+import java.util.stream.Collectors;
 
 /**
  * Renders performance results to the console and saves them as CSV and JSON.
@@ -42,7 +43,8 @@ public class PerformanceReporter {
      * table at the end.
      *
      * @param metrics list of collected {@link VideoMetrics}, one per tab
-     */    public void printConsoleReport(List<VideoMetrics> metrics) {
+     */
+    public void printConsoleReport(List<VideoMetrics> metrics) {
         String sep  = "=".repeat(110);
         String dash = "-".repeat(110);
 
@@ -62,8 +64,6 @@ public class PerformanceReporter {
 
             // ── Connection metrics (latency / resolver) ──────────────────
             System.out.println("  [ CONNECTION ]");
-            printRow("DNS Lookup",     formatMs(m.getDnsLookupTime())     + "  ← resolver latency (0 = cached)");
-            printRow("TCP Connection", formatMs(m.getTcpConnectionTime()) + "  ← round-trip to CDN edge (0 = reused)");
             printRow("TTFB",          formatMs(m.getTimeToFirstByte())   + "  ← server latency" +
                 (m.getTabIndex() == 1 ? " (cold conn)" : " (warm conn)"));
 
@@ -99,12 +99,15 @@ public class PerformanceReporter {
                     "Sample", "@Time", "Bandwidth", "Played(s)", "Buffered(s)", "Quality", "New Segs");
                 System.out.println("  " + "-".repeat(90));
                 for (NetworkSample s : samples) {
-                    // When the player downloaded nothing this window, annotate why.
-                    // 0 KB/s + healthy buffer = ABR player deliberately idle (normal).
-                    // 0 KB/s + low buffer     = potential throughput problem.
+                    // When the player downloaded nothing this window, annotate why:
+                    // < 5 s ahead  → genuinely low buffer, potential stall
+                    // 5–10 s ahead → normal ABR lazy loading (player may burst-fetch soon)
+                    // > 10 s ahead → player is deliberately idle, buffer is healthy
                     double bufferAhead = s.getVideoBuffered() - s.getVideoCurrentTime();
                     String bwDisplay = s.getRecentSegmentCount() == 0 && !s.isAdPlaying()
-                        ? (bufferAhead >= 10.0 ? "0.0 KB/s (idle)" : "0.0 KB/s (?)")
+                        ? (bufferAhead >= 10.0 ? "0.0 KB/s (idle)"
+                          : bufferAhead >= 5.0  ? "0.0 KB/s (lazy)"
+                          :                       "0.0 KB/s (!low)")
                         : String.format("%.1f KB/s", s.getBandwidthKBps());
                     System.out.printf("  #%-7d  +%-6ds  %-18s  %-13s  %-13s  %-9s  %d%n",
                         s.getSampleNumber(),
@@ -121,6 +124,48 @@ public class PerformanceReporter {
 
             if (m.getErrorMessage() != null) {
                 System.out.printf("%n  !! ERROR: %s%n", m.getErrorMessage());
+            }
+
+            // ── Stats for Nerds section ───────────────────────────────────────
+            StatsForNerdsData sfn = m.getSfnData();
+            if (sfn != null && sfn.isAvailable()) {
+                System.out.println("  [ STATS FOR NERDS ]");
+                if (sfn.getConnectionSpeedKbps() >= 0)
+                    printRow("Connection Speed",
+                        String.format("%.0f Kbps  (%.1f Mbps)",
+                            sfn.getConnectionSpeedKbps(), sfn.getConnectionSpeedKbps() / 1000.0));
+                if (sfn.getNetworkActivityKB() >= 0)
+                    printRow("Network Activity", sfn.getNetworkActivityKB() + " KB");
+                if (sfn.getBufferHealthSecs() >= 0)
+                    printRow("Buffer Health", String.format("%.2f s", sfn.getBufferHealthSecs()));
+                if (sfn.getCurrentResolution() != null)
+                    printRow("Current Res", sfn.getCurrentResolution()
+                        + (sfn.getOptimalResolution() != null
+                            ? "  /  optimal: " + sfn.getOptimalResolution()
+                            : ""));
+                if (sfn.getVideoCodec() != null || sfn.getAudioCodec() != null)
+                    printRow("Codecs", sfn.codecSummary()
+                        + "  (" + (sfn.getVideoCodec() != null ? sfn.getVideoCodec() : "?")
+                        + " / " + (sfn.getAudioCodec() != null ? sfn.getAudioCodec() : "?") + ")");
+                if (sfn.getTotalFrames() >= 0)
+                    printRow("Frames (total/drop)", sfn.getTotalFrames() + " / " + sfn.getDroppedFrames());
+            }
+
+            // ── Quality checks section ────────────────────────────────────────
+            VideoVerdict verdict = new PerformanceEvaluator().evaluate(m);
+            List<CheckResult> checks = verdict.getChecks();
+            if (!checks.isEmpty()) {
+                System.out.println("  [ QUALITY CHECKS ]");
+                System.out.printf("  %-35s  %-30s  %-25s  %s%n",
+                    "Check", "Threshold", "Actual", "Status");
+                System.out.println("  " + "-".repeat(100));
+                for (CheckResult c : checks) {
+                    System.out.printf("  %-35s  %-30s  %-25s  [%s]%n",
+                        c.getCheckName(),
+                        c.getExpected(),
+                        c.getActual(),
+                        c.isPassed() ? "PASS" : "FAIL");
+                }
             }
         }
 
@@ -148,8 +193,8 @@ public class PerformanceReporter {
         System.out.println("\n" + sep);
         System.out.println("  INTERNET PERFORMANCE SUMMARY  (sorted by TTFB — best connection first)");
         System.out.println(sep);
-        System.out.printf("%-4s  %-10s  %-9s  %-9s  %-10s  %-14s  %-14s  %-12s  %s%n",
-            "Tab", "DNS(ms)", "TCP(ms)", "TTFB(ms)", "Load(ms)",
+        System.out.printf("%-4s  %-9s  %-10s  %-14s  %-14s  %-12s  %s%n",
+            "Tab", "TTFB(ms)", "Load(ms)",
             "Avg BW (KB/s)", "Peak BW(KB/s)", "Buffer(s)", "Title");
         System.out.println("-".repeat(120));
 
@@ -158,10 +203,8 @@ public class PerformanceReporter {
                .forEach(m -> {
                    String avgBw  = m.getAvgBandwidthKBps()  > 0 ? String.format("%.0f", m.getAvgBandwidthKBps())  : "N/A";
                    String peakBw = m.getPeakBandwidthKBps() > 0 ? String.format("%.0f", m.getPeakBandwidthKBps()) : "N/A";
-                   System.out.printf("%-4d  %-10s  %-9s  %-9s  %-10s  %-14s  %-14s  %-12s  %s%n",
+                   System.out.printf("%-4d  %-9s  %-10s  %-14s  %-14s  %-12s  %s%n",
                        m.getTabIndex(),
-                       formatMs(m.getDnsLookupTime()),
-                       formatMs(m.getTcpConnectionTime()),
                        formatMs(m.getTimeToFirstByte()),
                        formatMs(m.getPageLoadTime()),
                        avgBw, peakBw,
@@ -179,17 +222,21 @@ public class PerformanceReporter {
      *
      * @param metrics  list of collected {@link VideoMetrics}, one per tab
      * @param filename target file path (relative or absolute)
-     */    public void saveCsvReport(List<VideoMetrics> metrics, String filename) {
+     */
+    public void saveCsvReport(List<VideoMetrics> metrics, String filename) {
         try (PrintWriter pw = new PrintWriter(new FileWriter(filename))) {
             pw.println(
                 "Tab,URL,Title,PageLoad_ms,DOMContentLoaded_ms,TTFB_ms,DNS_ms,TCP_ms," +
                 "DOMInteractive_ms,VideoFound,Width,Height,CurrentTime_s,Duration_s," +
                 "Buffered_s,PlaybackRate,ReadyState,NetworkState,Paused," +
-                "TotalFrames,DroppedFrames,CorruptedFrames,DropRate_pct,Error"
+                "TotalFrames,DroppedFrames,CorruptedFrames,DropRate_pct," +
+                "SFN_ConnectionSpeed_Kbps,SFN_BufferHealth_s,SFN_NetworkActivity_KB," +
+                "SFN_CurrentRes,SFN_OptimalRes,SFN_VideoCodec,SFN_AudioCodec,Error"
             );
 
             for (VideoMetrics m : metrics) {
-                pw.printf("%d,\"%s\",\"%s\",%s,%s,%s,%s,%s,%s,%b,%d,%d,%.2f,%.2f,%.2f,%.2f,%s,%s,%b,%s,%s,%s,%.2f,\"%s\"%n",
+                StatsForNerdsData sfn = m.getSfnData();
+                pw.printf("%d,\"%s\",\"%s\",%s,%s,%s,%s,%s,%s,%b,%d,%d,%.2f,%.2f,%.2f,%.2f,%s,%s,%b,%s,%s,%s,%.2f,%s,%s,%s,\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"%n",
                     m.getTabIndex(),
                     csvEscape(m.getUrl()),
                     csvEscape(m.getPageTitle()),
@@ -205,6 +252,13 @@ public class PerformanceReporter {
                     m.isPaused(),
                     m.getTotalVideoFrames(), m.getDroppedVideoFrames(), m.getCorruptedVideoFrames(),
                     m.getDroppedFrameRatePct(),
+                    sfn != null && sfn.getConnectionSpeedKbps() >= 0 ? String.format("%.0f", sfn.getConnectionSpeedKbps()) : "",
+                    sfn != null && sfn.getBufferHealthSecs() >= 0    ? String.format("%.2f", sfn.getBufferHealthSecs())    : "",
+                    sfn != null && sfn.getNetworkActivityKB() >= 0   ? String.valueOf(sfn.getNetworkActivityKB())          : "",
+                    csvEscape(sfn != null ? sfn.getCurrentResolution() : null),
+                    csvEscape(sfn != null ? sfn.getOptimalResolution()  : null),
+                    csvEscape(sfn != null ? sfn.getVideoCodec()         : null),
+                    csvEscape(sfn != null ? sfn.getAudioCodec()         : null),
                     csvEscape(m.getErrorMessage())
                 );
             }
@@ -224,7 +278,8 @@ public class PerformanceReporter {
      *
      * @param metrics  list of collected {@link VideoMetrics}, one per tab
      * @param filename target file path (relative or absolute)
-     */    public void saveJsonReport(List<VideoMetrics> metrics, String filename) {
+     */
+    public void saveJsonReport(List<VideoMetrics> metrics, String filename) {
         try {
             ObjectMapper mapper = new ObjectMapper();
             mapper.enable(SerializationFeature.INDENT_OUTPUT);
@@ -243,7 +298,8 @@ public class PerformanceReporter {
      *
      * @param value the timing in milliseconds
      * @return e.g. {@code "245 ms"} or {@code "N/A"}
-     */    private String formatMs(long value) {
+     */
+    private String formatMs(long value) {
         return value >= 0 ? value + " ms" : "N/A";
     }
 

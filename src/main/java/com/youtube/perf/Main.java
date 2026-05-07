@@ -11,12 +11,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
 
 /**
  * Entry point. Runs three probes in parallel:
@@ -61,8 +56,8 @@ public class Main {
         boolean runWebsite = mode.contains("website");
         boolean runDns     = mode.contains("dns");
 
-        // Human-readable mode label for output (sorted for consistency)
-        String modeLabel = mode.stream().sorted().collect(Collectors.joining(","));
+        // Human-readable mode label — preserves youtube_N count token
+        String modeLabel = config.getModeLabel();
         // ── Windows UTF-8 console fix ────────────────────────────────────────
         //
         // Two independent layers must both use UTF-8 for box-drawing characters
@@ -152,8 +147,10 @@ public class Main {
         // windows begin at the same moment. Count equals the number of browser
         // probes that are actually running.
         int browserProbeCount = (runYoutube ? 1 : 0) + (runWebsite ? 1 : 0);
+        // startLatch is shared with DnsMonitor so all three probes enter their
+        // measurement windows simultaneously when browser probes are ready.
         CountDownLatch startLatch   = new CountDownLatch(browserProbeCount);
-        // Counted down after all browser probes finish to signal DNS to stop.
+        // Counted down after all browser probes finish, signalling DNS to stop.
         CountDownLatch dnsStopLatch = new CountDownLatch(1);
 
         // ── Submit selected probes concurrently ──────────────────────────────
@@ -179,16 +176,17 @@ public class Main {
                 new WebsiteTester(websiteUrls, startLatch, durationSeconds, liveWeb, programStartMs));
         }
         if (runDns) {
-            dnsFuture = executor.submit(new DnsMonitor(dnsDomains, dnsStopLatch, liveDns));
+            // Pass the browser startLatch so DNS starts measuring at the same moment
+            // as YouTube and Website probes (after browser tabs are ready).
+            dnsFuture = executor.submit(new DnsMonitor(dnsDomains, startLatch, dnsStopLatch, liveDns));
         }
 
         executor.shutdown();
 
-        // When no browser probes are running, the dnsStopLatch will never be
-        // counted down by probe collection. A timer thread handles it instead,
-        // stopping DNS at the absolute deadline.
+        // DNS-only mode: startLatch.count=0 so DnsMonitor.await() returns immediately.
+        // A timer counts down dnsStopLatch at the absolute deadline.
         if (runDns && browserProbeCount == 0) {
-            Thread timer = new Thread(() -> {
+            Thread stopTimer = new Thread(() -> {
                 try {
                     long remaining = absoluteDeadlineMs - System.currentTimeMillis();
                     if (remaining > 0) Thread.sleep(remaining);
@@ -196,88 +194,27 @@ public class Main {
                     Thread.currentThread().interrupt();
                 }
                 dnsStopLatch.countDown();
-            });
-            timer.setDaemon(true);
-            timer.setName("dns-stop-timer");
-            timer.start();
+            }, "dns-stop-timer");
+            stopTimer.setDaemon(true);
+            stopTimer.start();
         }
 
-        // ── Periodic JSON reporter ────────────────────────────────────────────
-        // The scheduler starts only AFTER the measurement window opens (both
-        // browser probes have synced on startLatch).  This ensures that
-        // "--report 5" means "every 5 s of actual measurement time", not
-        // "5 s from program launch" (which includes browser setup time).
-        //
-        // For DNS-only mode startLatch has count 0, so await() returns
-        // immediately and the scheduler starts right away.
-        AtomicReference<ScheduledExecutorService> schedulerRef = new AtomicReference<>();
-        AtomicInteger snapshotNum    = new AtomicInteger(0);
-        // Tracks the start of the current snapshot window so each snapshot
-        // only includes data collected SINCE the previous snapshot fired.
-        AtomicLong windowStartTs = new AtomicLong(0);
-
-        if (reportIntervalSecs > 0) {
-            final String lm       = modeLabel;
-            final int    dur      = durationSeconds;
-            final long   startMs  = programStartMs;
-            final long   intervalMs = reportIntervalSecs * 1000L;
-            final CountDownLatch sl = startLatch;
-
-            // Snapshot windows are anchored to programStartMs, not to when setup
-            // completes.  With "--report 30" the first snapshot fires at t=30 s from
-            // program launch, the second at t=60 s, etc., regardless of how long
-            // tab setup took.  windowStartTs begins at programStartMs so each
-            // snapshot window filter covers data since the previous boundary.
-            windowStartTs.set(startMs);
-
-            Thread schedulerStarter = new Thread(() -> {
-                try {
-                    sl.await();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-
-                // Calculate how long to wait from NOW until the next report boundary
-                // aligned to programStartMs.  If setup already consumed more than one
-                // interval (e.g. --report 10 but setup took 25 s), we jump to the next
-                // boundary that hasn't fired yet.
-                long elapsedMs        = System.currentTimeMillis() - startMs;
-                long intervalsElapsed = elapsedMs / intervalMs;
-                long nextBoundaryMs   = (intervalsElapsed + 1) * intervalMs; // ms from startMs
-                long initialDelayMs   = nextBoundaryMs - elapsedMs;
-                if (initialDelayMs < 0) initialDelayMs = 0;
-
-                ScheduledExecutorService sch = Executors.newSingleThreadScheduledExecutor(r -> {
-                    Thread t = new Thread(r, "periodic-reporter");
-                    t.setDaemon(true);
-                    return t;
-                });
-                schedulerRef.set(sch);
-                sch.scheduleAtFixedRate(() -> {
-                    long from = windowStartTs.get();
-                    int  snap = snapshotNum.incrementAndGet();
-                    System.out.println();
-                    System.out.println("--- Snapshot #" + snap + " ---");
-                    new JsonReporter().printJson(lm, dur, snap, from, liveYt, liveWeb, liveDns);
-                    // Advance window start to the current boundary so the next
-                    // snapshot only shows data collected since this one fired.
-                    windowStartTs.set(System.currentTimeMillis());
-                }, initialDelayMs, intervalMs, TimeUnit.MILLISECONDS);
-            }, "scheduler-starter");
-            schedulerStarter.setDaemon(true);
-            schedulerStarter.start();
-        }
+        // Periodic JSON snapshots removed — only the final report is emitted.
 
         // ── Collect results ──────────────────────────────────────────────────
+        // Timeout = monitoring window + 5 min overhead (browser startup + final collection).
+        // Fixed 10-minute cap was too short for durations >= ~570 s.
+        long ytTimeoutSecs  = durationSeconds + 300L;
+        long webTimeoutSecs = durationSeconds + 120L;
+
         if (ytFuture != null) {
             try {
-                ytFuture.get(10, TimeUnit.MINUTES);
+                ytFuture.get(ytTimeoutSecs, TimeUnit.SECONDS);
             } catch (Exception e) {
                 logger.error("YouTube probe failed: {}", rootCause(e));
                 ytFuture.cancel(true);
             } finally {
-                // If no website probe is running, signal DNS to stop now.
+                // If no website probe is running, all browser probes are done — stop DNS.
                 if (webFuture == null) {
                     dnsStopLatch.countDown();
                 }
@@ -286,12 +223,12 @@ public class Main {
 
         if (webFuture != null) {
             try {
-                webFuture.get(5, TimeUnit.MINUTES);
+                webFuture.get(webTimeoutSecs, TimeUnit.SECONDS);
             } catch (Exception e) {
                 logger.error("Website probe failed: {}", rootCause(e));
                 webFuture.cancel(true);
             } finally {
-                // Always signal DNS after the last browser probe finishes.
+                // Last browser probe done — signal DNS to stop.
                 dnsStopLatch.countDown();
             }
         }
@@ -305,17 +242,8 @@ public class Main {
             }
         }
 
-        // Stop the periodic reporter before printing the final report so
-        // they don't interleave.
-        ScheduledExecutorService scheduler = schedulerRef.get();
-        if (scheduler != null) {
-            scheduler.shutdown();
-            try { scheduler.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-        }
-
-        // ── Final JSON snapshot (fromTs=0 → show every cycle, no window filter) ──
+        // ── Final JSON report (fromTs=0 → includes all collected data) ──────
         System.out.println();
-        System.out.println("--- FINAL ---");
         new JsonReporter().printJson(modeLabel, durationSeconds, 0, 0L, liveYt, liveWeb, liveDns);
 
         // ── Combined Final Report (console table view) ───────────────────────
@@ -326,7 +254,7 @@ public class Main {
             reporter.saveJsonReport(liveYt, "youtube_performance_report.json");
         }
 
-        WebsiteReporter websiteReporter = new WebsiteReporter();
+        WebsiteReporter websiteReporter = new WebsiteReporter(config::getThresholds);
 
         if (liveWeb != null && !liveWeb.isEmpty()) {
             websiteReporter.printWebsiteReport(liveWeb);
@@ -340,6 +268,14 @@ public class Main {
             ? new PerformanceEvaluator().evaluateAll(liveYt)
             : (liveYt != null ? java.util.Collections.emptyList() : null);
         websiteReporter.printFinalSummary(verdicts, liveWeb, liveDns);
+
+        // ── HTML report ───────────────────────────────────────────────────────
+        // Always write into target/ so the report sits alongside the JAR and
+        // is not accidentally committed or left in the project root.
+        java.nio.file.Path targetDir = java.nio.file.Paths.get("target");
+        try { java.nio.file.Files.createDirectories(targetDir); } catch (Exception ignored) {}
+        String htmlPath = targetDir.resolve("net_performance_report.html").toString();
+        new HtmlReporter(config::getThresholds).saveReport(liveYt, liveWeb, liveDns, verdicts, htmlPath);
 
         logger.info("All probes complete.");
     }

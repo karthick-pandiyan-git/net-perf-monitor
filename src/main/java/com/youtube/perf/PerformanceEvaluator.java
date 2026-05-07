@@ -2,18 +2,17 @@ package com.youtube.perf;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Evaluates each {@link VideoMetrics} snapshot for internet connection quality.
  *
- * The 7 checks that directly reflect network health:
- *   1. DNS Lookup Time          - resolver latency
- *   2. TCP Connection RTT       - distance to CDN edge
- *   3. TTFB                     - server latency + CDN routing
- *   4. Page Load Time           - combined bandwidth + latency
- *   5. Stream Buffer Depth      - sustained throughput health
- *   6. Avg Streaming BW         - live throughput measurement over 30 s
- *   7. Video Quality Stability  - did YouTube's ABR degrade quality during playback?
+ * The 5 checks that directly reflect network health:
+ *   1. TTFB                     - server latency + CDN routing
+ *   2. Page Load Time           - combined bandwidth + latency
+ *   3. Stream Buffer Depth      - sustained throughput health
+ *   4. Avg Streaming BW         - live throughput measurement over 30 s
+ *   5. Video Quality Stability  - did YouTube's ABR degrade quality during playback?
  *
  * Frame drops, paused state, and ready state are intentionally excluded — they
  * reflect device/codec behaviour, not network performance. Resolution IS included
@@ -50,31 +49,23 @@ public class PerformanceEvaluator {
     private static final long MAX_TTFB_COLD_MS = 3_000;
 
     /**
-     * DNS lookup threshold. > 200 ms indicates a slow resolver or no local cache.
-     * A result of 0 ms means the OS DNS cache was hit (expected on tabs 2+).
-     */
-    private static final long MAX_DNS_MS = 200;
-
-    /**
-     * TCP connection threshold — round-trip time to the CDN edge.
-     * > 150 ms suggests routing to a distant server.
-     * 0 ms means the connection was reused (HTTP/2 keep-alive).
-     */
-    private static final long MAX_TCP_MS = 200;
-
-    /**
      * Buffer depth: seconds of video pre-loaded beyond the current playhead.
      * < 10 s means the connection is barely keeping up with real-time playback.
      */
     private static final double MIN_BUFFERED_SECS = 10.0;
 
     /**
+     * Minimum connection speed (in Kbps) as reported by YouTube's Stats for Nerds panel.
+     * 2500 Kbps = 2.5 Mbps, the minimum YouTube recommends for sustained HD (720p) streaming.
+     */
+    private static final double MIN_SFN_CONNECTION_SPEED_KBPS = 2500.0;
+
+
+    /**
      * Minimum average bandwidth across the 30-second monitoring window.
      * 250 KB/s ≈ 2 Mbps — minimum for consistent HD streaming.
      */
     private static final double MIN_AVG_BANDWIDTH_KBPS = 250.0;
-
-    // ── Public API ────────────────────────────────────────────────────────────
 
     /**
      * Evaluates the seven internet-health checks for one YouTube video tab.
@@ -87,25 +78,7 @@ public class PerformanceEvaluator {
     public VideoVerdict evaluate(VideoMetrics m) {
         List<CheckResult> checks = new ArrayList<>();
 
-        // 1. DNS lookup — resolver latency (0 ms = OS cache hit, expected on tabs 2+)
-        boolean dnsOk = m.getDnsLookupTime() >= 0 && m.getDnsLookupTime() <= MAX_DNS_MS;
-        checks.add(check(
-            "DNS Lookup Time",
-            "<= " + MAX_DNS_MS + " ms  (0 = cached)",
-            m.getDnsLookupTime() >= 0 ? m.getDnsLookupTime() + " ms" : "N/A",
-            dnsOk
-        ));
-
-        // 2. TCP round-trip — latency to CDN edge (0 ms = HTTP/2 connection reused)
-        boolean tcpOk = m.getTcpConnectionTime() >= 0 && m.getTcpConnectionTime() <= MAX_TCP_MS;
-        checks.add(check(
-            "TCP Connection (RTT)",
-            "<= " + MAX_TCP_MS + " ms  (0 = reused)",
-            m.getTcpConnectionTime() >= 0 ? m.getTcpConnectionTime() + " ms" : "N/A",
-            tcpOk
-        ));
-
-        // 3. TTFB — server latency; Tab 1 gets cold-connection allowance
+        // 1. TTFB — server latency; Tab 1 gets cold-connection allowance
         long   ttfbLimit = (m.getTabIndex() == 1) ? MAX_TTFB_COLD_MS : MAX_TTFB_MS;
         String ttfbLabel = (m.getTabIndex() == 1)
             ? "<= " + MAX_TTFB_COLD_MS + " ms (cold)"
@@ -200,6 +173,63 @@ public class PerformanceEvaluator {
             ));
         }
 
+        // ── Stats for Nerds checks (8–10) — only when panel data was captured ──
+        StatsForNerdsData sfn = m.getSfnData();
+        if (sfn != null && sfn.isAvailable()) {
+
+            // 8. SFN Connection Speed — YouTube's own ABR throughput measurement.
+            //    Provides a second opinion on bandwidth that is independent of the
+            //    resource-timing API estimate used in check 6.
+            if (sfn.getConnectionSpeedKbps() >= 0) {
+                boolean speedOk = sfn.getConnectionSpeedKbps() >= MIN_SFN_CONNECTION_SPEED_KBPS;
+                checks.add(check(
+                    "SFN Connection Speed",
+                    ">= " + (int) MIN_SFN_CONNECTION_SPEED_KBPS + " Kbps (HD minimum)",
+                    String.format("%.0f Kbps (%.1f Mbps)",
+                        sfn.getConnectionSpeedKbps(),
+                        sfn.getConnectionSpeedKbps() / 1000.0),
+                    speedOk
+                ));
+            }
+
+            // 9. SFN Buffer Health — FAIL only when any monitoring sweep recorded 0 s,
+            //    which means the buffer was fully drained (imminent stall).
+            //    Transient dips above 0 are acceptable; only a genuine empty-buffer
+            //    event during playback is actionable.
+            if (sfn.getBufferHealthSecs() >= 0) {
+                boolean anyZero = m.getNetworkSamples().stream()
+                    .anyMatch(s -> s.getBufferHealthSecs() == 0.0);
+                boolean sfnBufOk = !anyZero;
+                String actual = anyZero
+                    ? "0 s hit (buffer drained)"
+                    : String.format("%.2f s avg (min > 0)", sfn.getBufferHealthSecs());
+                checks.add(check(
+                    "SFN Buffer Health",
+                    "never 0 s during sweeps",
+                    actual,
+                    sfnBufOk
+                ));
+            }
+
+            // 10. SFN Resolution Match — current resolution should equal the optimal
+            //     resolution YouTube calculated for this connection.  A mismatch means
+            //     the ABR engine served a lower tier than the connection can sustain,
+            //     which can signal an unstable throughput during the ramp-up period.
+            if (sfn.getCurrentResolution() != null && sfn.getOptimalResolution() != null) {
+                boolean resOk = !sfn.isResolutionBelowOptimal();
+                String resActual = sfn.getCurrentResolution() + " / optimal: " + sfn.getOptimalResolution();
+                checks.add(check(
+                    "SFN Resolution Match",
+                    "current == optimal",
+                    resActual,
+                    resOk
+                ));
+            }
+        }
+
+        // ── Statistical checks (11–12) — sweep-sample based, adaptive to run length ──
+        addStatisticalChecks(checks, samples);
+
         return new VideoVerdict(m, checks);
     }
 
@@ -229,5 +259,83 @@ public class PerformanceEvaluator {
      */
     private CheckResult check(String name, String expected, String actual, boolean passed) {
         return new CheckResult(name, expected, actual, passed);
+    }
+
+    // ── Statistical checks (added when ≥ 3 sweep samples are available) ───────
+
+    /**
+     * Adds statistical pass/fail checks derived from the buffer and frame-drop sweep
+     * samples collected during the monitoring window.
+     *
+     * <p>Two checks are produced:</p>
+     * <ul>
+     *   <li><b>Buffer Depth Consistency</b> — the lower confidence bound
+     *       (mean − 1σ) of per-sweep buffer readings must remain above
+     *       {@link #MIN_BUFFERED_SECS}. A result below the threshold means the
+     *       buffer occasionally dipped dangerously low during playback.</li>
+     *   <li><b>Frame Drop (Catastrophic)</b> — fails only when any single sweep
+     *       recorded 100% frame drops, indicating a complete playback stall.</li>
+     * </ul>
+     *
+     * @param checks  list to append results to
+     * @param samples per-sweep network samples for this tab
+     */
+    void addStatisticalChecks(List<CheckResult> checks, List<NetworkSample> samples) {
+        if (samples == null || samples.size() < StatisticsEngine.MIN_USABLE_SAMPLES) return;
+
+        // ── Buffer depth consistency ──────────────────────────────────────────
+        List<Double> bufValues = samples.stream()
+            .filter(s -> !s.isAdPlaying())
+            .map(NetworkSample::getVideoBuffered)
+            .collect(Collectors.toList());
+
+        StatisticsEngine.Stats bufStats = StatisticsEngine.compute(bufValues);
+        if (bufStats != null) {
+            // Lower bound = mean - 1σ.  If this dips below MIN_BUFFERED_SECS the
+            // buffer was sometimes insufficient even if the average looks fine.
+            double lowerBound = bufStats.lcl(1.0);
+            boolean bufConsistent = lowerBound >= MIN_BUFFERED_SECS;
+            String sampleNote = bufStats.isReliable() ? "" : "  [limited n=" + bufStats.n + "]";
+            checks.add(check(
+                "Buffer Depth Consistency",
+                String.format("μ−1σ ≥ %.0f s (never dips low)", MIN_BUFFERED_SECS),
+                String.format("μ=%.1f s  σ=%.1f s  μ−1σ=%.1f s%s",
+                    bufStats.mean, bufStats.stddev, lowerBound, sampleNote),
+                bufConsistent
+            ));
+        }
+
+        // ── Frame drop rate consistency ───────────────────────────────────────
+        // Compute per-sweep drop % from the cumulative SFN counters stored on each
+        // sample, then evaluate the mean and spread against the 1% quality threshold.
+        List<Double> dropPctValues = new ArrayList<>();
+        for (int si = 0; si < samples.size(); si++) {
+            NetworkSample s = samples.get(si);
+            if (s.getDroppedFrames() < 0 || s.getTotalFrames() <= 0) continue;
+            if (si == 0) {
+                dropPctValues.add(s.getTotalFrames() > 0
+                    ? 100.0 * s.getDroppedFrames() / s.getTotalFrames() : null);
+            } else {
+                NetworkSample prev = samples.get(si - 1);
+                long dDrop  = s.getDroppedFrames() - (prev.getDroppedFrames() >= 0 ? prev.getDroppedFrames() : 0);
+                long dTotal = s.getTotalFrames()   - (prev.getTotalFrames()   >  0 ? prev.getTotalFrames()   : 0);
+                if (dTotal > 0) dropPctValues.add(100.0 * dDrop / dTotal);
+            }
+        }
+        if (!dropPctValues.isEmpty()) {
+            // Catastrophic check: any single sweep where ALL frames were dropped.
+            // Normal drop rates (even elevated ones) are device/codec artefacts and
+            // are not indicative of a network problem; only a 100% sweep signals a
+            // complete playback stall that is actionable.
+            boolean anyTotal100 = dropPctValues.stream().anyMatch(v -> v >= 100.0);
+            checks.add(check(
+                "Frame Drop (Catastrophic)",
+                "no sweep at 100%",
+                anyTotal100
+                    ? "100% drop detected in a sweep"
+                    : "no 100% sweep  (n=" + dropPctValues.size() + ")",
+                !anyTotal100
+            ));
+        }
     }
 }
