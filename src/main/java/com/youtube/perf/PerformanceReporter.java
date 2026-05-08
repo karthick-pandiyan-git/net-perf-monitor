@@ -291,6 +291,118 @@ public class PerformanceReporter {
         }
     }
 
+    // ── Full CSV (all probes) ─────────────────────────────────────────────────
+
+    /**
+     * Saves a comprehensive CSV report covering all three probes to {@code filename}.
+     * The file contains three clearly labelled sections: YOUTUBE PERFORMANCE,
+     * WEBSITE PERFORMANCE, and DNS MONITORING — each with its own header row and data rows.
+     * On error the exception is logged and no file is written.
+     *
+     * @param ytMetrics  YouTube metrics (may be null/empty)
+     * @param webMetrics Website metrics (may be null/empty)
+     * @param dnsResults DNS results (may be null/empty)
+     * @param filename   target file path (relative or absolute)
+     */
+    public void saveFullCsvReport(
+            List<VideoMetrics>   ytMetrics,
+            List<WebsiteMetrics> webMetrics,
+            List<DnsResult>      dnsResults,
+            String filename) {
+        DateTimeFormatter timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss");
+        try (PrintWriter pw = new PrintWriter(new FileWriter(filename))) {
+
+            // ── YouTube section ─────────────────────────────────────────────
+            if (ytMetrics != null && !ytMetrics.isEmpty()) {
+                pw.println("## YOUTUBE PERFORMANCE");
+                pw.println("Tab,URL,Title,TTFB_ms,PageLoad_ms,DCL_ms,DNS_ms,TCP_ms," +
+                           "AvgBW_KBps,PeakBW_KBps,Buffer_s," +
+                           "VideoWidth,VideoHeight,TotalFrames,DroppedFrames,DropRate_pct," +
+                           "SFN_Speed_Kbps,SFN_Buffer_s,Error");
+                for (VideoMetrics m : ytMetrics) {
+                    StatsForNerdsData sfn = m.getSfnData();
+                    pw.printf("%d,\"%s\",\"%s\",%s,%s,%s,%s,%s,%.2f,%.2f,%.2f,%d,%d,%s,%s,%.2f,%s,%s,\"%s\"%n",
+                        m.getTabIndex(),
+                        csvEscape(m.getUrl()),
+                        csvEscape(m.getPageTitle()),
+                        m.getTimeToFirstByte(), m.getPageLoadTime(), m.getDomContentLoadedTime(),
+                        m.getDnsLookupTime(), m.getTcpConnectionTime(),
+                        m.getAvgBandwidthKBps(), m.getPeakBandwidthKBps(),
+                        m.getBufferedSeconds(),
+                        m.getVideoWidth(), m.getVideoHeight(),
+                        m.getTotalVideoFrames(), m.getDroppedVideoFrames(),
+                        m.getDroppedFrameRatePct(),
+                        sfn != null && sfn.getConnectionSpeedKbps() >= 0 ? String.format("%.0f", sfn.getConnectionSpeedKbps()) : "",
+                        sfn != null && sfn.getBufferHealthSecs()    >= 0 ? String.format("%.2f", sfn.getBufferHealthSecs())    : "",
+                        csvEscape(m.getErrorMessage())
+                    );
+                }
+                pw.println();
+            }
+
+            // ── Website section ─────────────────────────────────────────────
+            if (webMetrics != null && !webMetrics.isEmpty()) {
+                pw.println("## WEBSITE PERFORMANCE");
+                pw.println("Domain,Tab,Cycle,Timestamp,PageLoad_ms,TTFB_ms,DCL_ms," +
+                           "DNS_ms,TCP_ms,IPv4_Reach,IPv6_Reach,IPv4_Addr,IPv6_Addr," +
+                           "IPv4_Connect_ms,IPv6_Connect_ms,Success,Error");
+                for (WebsiteMetrics m : webMetrics) {
+                    String ts = m.getTimestamp() > 0
+                        ? Instant.ofEpochMilli(m.getTimestamp())
+                               .atZone(ZoneId.systemDefault())
+                               .format(timeFmt)
+                        : "";
+                    pw.printf("\"%s\",%d,%d,%s,%s,%s,%s,%s,%s,%b,%b,\"%s\",\"%s\",%s,%s,%b,\"%s\"%n",
+                        csvEscape(m.getDomain()),
+                        m.getTabIndex(), m.getRefreshCycle(), ts,
+                        m.getPageLoadTime(), m.getTimeToFirstByte(), m.getDomContentLoaded(),
+                        m.getDnsLookupTime(), m.getTcpConnectionTime(),
+                        m.isIpv4Reachable(), m.isIpv6Reachable(),
+                        csvEscape(m.getIpv4Address()), csvEscape(m.getIpv6Address()),
+                        m.getIpv4ConnectMs(), m.getIpv6ConnectMs(),
+                        m.isSuccess(),
+                        csvEscape(m.getErrorMessage())
+                    );
+                }
+                pw.println();
+            }
+
+            // ── DNS section ─────────────────────────────────────────────────
+            if (dnsResults != null && !dnsResults.isEmpty()) {
+                pw.println("## DNS MONITORING");
+                pw.println("Domain,Type,Round,Timestamp,ResponseTime_ms,Success,Addresses,Error");
+                Map<String, Integer> roundCounters = new LinkedHashMap<>();
+                List<DnsResult> sorted = dnsResults.stream()
+                    .sorted(Comparator.comparingLong(DnsResult::getTimestamp))
+                    .collect(Collectors.toList());
+                for (DnsResult r : sorted) {
+                    String key   = r.getDomain() + "|" + r.getRecordType();
+                    int    round = roundCounters.merge(key, 1, Integer::sum);
+                    String ts    = r.getTimestamp() > 0
+                        ? Instant.ofEpochMilli(r.getTimestamp())
+                               .atZone(ZoneId.systemDefault())
+                               .format(timeFmt)
+                        : "";
+                    String addrs = r.getResolvedAddresses() != null
+                        ? String.join(";", r.getResolvedAddresses()) : "";
+                    pw.printf("\"%s\",%s,%d,%s,%d,%b,\"%s\",\"%s\"%n",
+                        csvEscape(r.getDomain()),
+                        r.getRecordType(), round, ts,
+                        r.getResponseTimeMs(), r.isSuccess(),
+                        csvEscape(addrs),
+                        csvEscape(r.getErrorMessage())
+                    );
+                }
+            }
+
+            System.out.printf("CSV report saved  \u2192 %s%n", new File(filename).getAbsolutePath());
+            logger.info("CSV report saved to {}", filename);
+
+        } catch (IOException e) {
+            logger.error("Failed to save full CSV report", e);
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
     /**
      * Formats a timing value as a human-readable millisecond string.

@@ -13,9 +13,12 @@ import org.xbill.DNS.Section;
 import org.xbill.DNS.SimpleResolver;
 import org.xbill.DNS.Type;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Properties;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -39,12 +42,35 @@ public class DnsMonitor implements Callable<List<DnsResult>> {
 
     private static final Logger logger = LoggerFactory.getLogger(DnsMonitor.class);
 
+    // ── Probe configuration (loaded from probe-timing.properties) ─────────────
     /** Google Public DNS — queried directly over UDP, no OS cache involved. */
-    private static final String RESOLVER_IP             = "8.8.8.8";
+    private static final String RESOLVER_IP;
     /** Per-query timeout. If 8.8.8.8 doesn't respond within this time, the internet is down. */
-    private static final int    RESOLVER_TIMEOUT_SECS   = 5;
-    /** Pause between rounds — one round per 5 s to align with the YouTube and website sweep interval. */
-    private static final int    PAUSE_BETWEEN_ROUNDS_MS = 5_000;
+    private static final int    RESOLVER_TIMEOUT_SECS;
+    /** Pause between rounds — aligned with the YouTube / website sweep interval. */
+    private static final int    PAUSE_BETWEEN_ROUNDS_MS;
+
+    static {
+        Properties cfg = loadConfig();
+        RESOLVER_IP             = cfg.getProperty("dns.probe.resolver_ip",              "8.8.8.8");
+        RESOLVER_TIMEOUT_SECS   = Integer.parseInt(cfg.getProperty("dns.probe.resolver_timeout.secs",   "5"));
+        PAUSE_BETWEEN_ROUNDS_MS = Integer.parseInt(cfg.getProperty("dns.probe.pause_between_rounds.ms", "5000"));
+    }
+
+    private static Properties loadConfig() {
+        Properties p = new Properties();
+        try (InputStream is = DnsMonitor.class.getClassLoader()
+                .getResourceAsStream("probe-timing.properties")) {
+            if (is != null) {
+                p.load(is);
+            } else {
+                logger.warn("'probe-timing.properties' not found — using built-in DNS probe defaults");
+            }
+        } catch (IOException e) {
+            logger.warn("Failed to load 'probe-timing.properties': {} — using built-in defaults", e.getMessage());
+        }
+        return p;
+    }
 
     private final List<String> domains;
     /**

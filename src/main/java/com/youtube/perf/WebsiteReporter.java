@@ -23,12 +23,31 @@ public class WebsiteReporter {
     // Thresholds used for inline PASS/FAIL annotation
     /** Returns the applicable thresholds for a given domain. */
     private final Function<String, WebsiteThresholds> thresholdsFor;
+    /** Configured test duration in seconds — used for minimum-cycle coverage checks. */
+    private final int durationSeconds;
+    /** Minimum fraction of expected website cycles (from statistics.properties). */
+    private final double minCyclesRatio;
+    /** Website cycle interval in ms (from probe-timing.properties). */
+    private final int cycleIntervalMs;
 
     private static final long THRESHOLD_DCL_MS         = 4_000;
     private static final long THRESHOLD_DNS_LOOKUP_MS  = 200;
 
-    public WebsiteReporter(Function<String, WebsiteThresholds> thresholdsFor) {
-        this.thresholdsFor = thresholdsFor;
+    public WebsiteReporter(Function<String, WebsiteThresholds> thresholdsFor, int durationSeconds) {
+        this.thresholdsFor  = thresholdsFor;
+        this.durationSeconds = durationSeconds;
+
+        java.util.Properties stats = new java.util.Properties();
+        try (java.io.InputStream is = getClass().getClassLoader().getResourceAsStream("statistics.properties")) {
+            if (is != null) stats.load(is);
+        } catch (java.io.IOException ignored) { /* defaults apply */ }
+        this.minCyclesRatio = Double.parseDouble(stats.getProperty("website.min_cycles_ratio", "0.25"));
+
+        java.util.Properties probe = new java.util.Properties();
+        try (java.io.InputStream is = getClass().getClassLoader().getResourceAsStream("probe-timing.properties")) {
+            if (is != null) probe.load(is);
+        } catch (java.io.IOException ignored) { /* defaults apply */ }
+        this.cycleIntervalMs = Integer.parseInt(probe.getProperty("website.probe.cycle_interval.ms", "5000"));
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -291,11 +310,15 @@ public class WebsiteReporter {
      * @param ytVerdicts  per-video PASS/FAIL verdicts (may be null/empty)
      * @param webMetrics  website refresh-cycle metrics  (may be null/empty)
      * @param dnsResults  DNS query results               (may be null/empty)
+     * @param dnsSpikeAnalysis pre-computed DNS spike pattern analysis
+     * @param webSpikeAnalysis pre-computed Website spike pattern analysis
      */
     public void printFinalSummary(
             List<VideoVerdict>   ytVerdicts,
             List<WebsiteMetrics> webMetrics,
-            List<DnsResult>      dnsResults) {
+            List<DnsResult>      dnsResults,
+            SpikeAnalyzer.Result dnsSpikeAnalysis,
+            SpikeAnalyzer.Result webSpikeAnalysis) {
 
         System.out.println();
         System.out.println("╔══════════════════════════════════════════════════════════════════════════╗");
@@ -310,7 +333,7 @@ public class WebsiteReporter {
             System.out.println("  ║  Internet checks per video (5 core + up to 3 Stats for Nerds + up to 2 statistical):");
             System.out.println("  ║    TTFB ≤ 3000 ms (cold) / 1500 ms (warm)  │  Page Load ≤ 15000 ms (cold) / 12000 ms (warm)");
             System.out.println("  ║    Buffer ≥ 10 s  │  Avg BW ≥ 250 KB/s  │  Quality Stability: no ABR downgrade during playback");
-            System.out.println("  ║    Stats for Nerds (when available): SFN Connection Speed ≥ 2500 Kbps  │  SFN Buffer Health ≥ 10 s  │  SFN Resolution match");
+            System.out.println("  ║    Stats for Nerds (when available): SFN Connection Speed ≥ 2500 Kbps  │  SFN Buffer Health: no 2+ consecutive 0 s sweeps  │  SFN Resolution match");
             System.out.println("  ║    Statistical: Buffer Depth Consistency (μ−1σ ≥ 10 s)  │  Frame Drop (Catastrophic): no 100% drop sweep");
             System.out.println("  ╚═══════════════════════════════════════════════════════════════════════");
             System.out.printf("  %-5s  %-45s  %-18s  %8s  %6s  %s%n",
@@ -392,14 +415,28 @@ public class WebsiteReporter {
             System.out.println("  " + "─".repeat(90));
 
             if (anyDnsResults) {
+                // Compute overall stats for the critical threshold annotation
+                List<Double> allSuccessRts = dnsResults.stream()
+                    .filter(DnsResult::isSuccess)
+                    .map(r -> (double) r.getResponseTimeMs())
+                    .collect(Collectors.toList());
+                StatisticsEngine.Stats overallStats = StatisticsEngine.compute(allSuccessRts);
+                StatisticsEngine.Stats robustStats  = StatisticsEngine.computeRobust(allSuccessRts);
+                StatisticsEngine.Stats gateStats    = robustStats != null ? robustStats : overallStats;
+                double criticalMs = gateStats != null ? gateStats.ucl(5.0) : Double.MAX_VALUE;
+
                 dnsResults.stream()
                     .collect(Collectors.groupingBy(r -> r.getDomain() + "||" + r.getRecordType()))
                     .entrySet().stream()
                     .sorted(Map.Entry.comparingByKey())
                     .forEach(e -> {
                         String[] parts = e.getKey().split("\\|\\|");
-                        printDnsQueryRows(parts[0], parts[1], e.getValue());
+                        printDnsQueryRows(parts[0], parts[1], e.getValue(),
+                            criticalMs, dnsSpikeAnalysis);
                     });
+
+                // Print statistical summary footer
+                printDnsStatsSummary(dnsResults, overallStats, gateStats, dnsSpikeAnalysis);
             } else {
                 System.out.println("  No DNS results.");
             }
@@ -413,12 +450,61 @@ public class WebsiteReporter {
         boolean allYtPass    = anyYtResults && ytVerdicts.stream().allMatch(VideoVerdict::isPassed);
         long    ytPass       = anyYtResults ? ytVerdicts.stream().filter(VideoVerdict::isPassed).count() : 0;
         long    ytTotal      = anyYtResults ? ytVerdicts.size() : 0;
-        boolean allWebPass = anyWebResults && webMetrics.stream()
-            .collect(Collectors.groupingBy(WebsiteMetrics::getDomain))
-            .values().stream().allMatch(this::websiteDomainPasses);
-        boolean allDnsPass = anyDnsResults && dnsResults.stream()
-            .collect(Collectors.groupingBy(r -> r.getDomain() + "||" + r.getRecordType()))
-            .values().stream().allMatch(this::dnsDomainToolPasses);
+
+        // Website PASS: no spike-pattern FAIL AND sufficient cycle coverage.
+        // Slow pages → WARN (noted in detail above) but do not by themselves fail
+        // the probe. Hard-load failures (isSuccess=false) do.
+        long webCycleCount    = anyWebResults
+            ? webMetrics.stream().mapToInt(WebsiteMetrics::getRefreshCycle).distinct().count() : 0;
+        long expectedWebCycles = durationSeconds / Math.max(1, cycleIntervalMs / 1000);
+        long minRequiredCycles = Math.max(2, Math.round(expectedWebCycles * minCyclesRatio));
+        boolean webInsufficientCycles = anyWebResults && webCycleCount < minRequiredCycles;
+
+        boolean allWebPass = anyWebResults
+            && !webSpikeAnalysis.isSignificantFailure()
+            && !webInsufficientCycles
+            && webMetrics.stream().noneMatch(m -> !m.isSuccess());
+
+        // DNS PASS: query hard-failure rate < 2 % AND no spike-pattern FAIL.
+        // Isolated random spikes (INFO) do not fail the probe.
+        boolean allDnsPass;
+        if (!anyDnsResults) {
+            allDnsPass = false;
+        } else {
+            long dnsTotal   = dnsResults.size();
+            long dnsFailed  = dnsResults.stream().filter(r -> !r.isSuccess()).count();
+            double failRate = 100.0 * dnsFailed / dnsTotal;
+            // Hard failure: > 2% queries failed or spike pattern is structurally significant
+            allDnsPass = failRate < 2.0 && !dnsSpikeAnalysis.isSignificantFailure();
+        }
+
+        // Derive detail labels for each probe
+        String webResult;
+        if (!anyWebResults) {
+            webResult = "FAIL";
+        } else if (webInsufficientCycles || webSpikeAnalysis.isSignificantFailure()) {
+            webResult = "FAIL";
+        } else if (!allWebPass) {
+            webResult = "WARN";
+        } else {
+            webResult = "PASS";
+        }
+
+        String dnsResult;
+        if (!anyDnsResults) {
+            dnsResult = "FAIL";
+        } else {
+            long dnsTotal   = dnsResults.size();
+            long dnsFailed  = dnsResults.stream().filter(r -> !r.isSuccess()).count();
+            double failRate = 100.0 * dnsFailed / dnsTotal;
+            if (dnsSpikeAnalysis.isSignificantFailure() || failRate >= 2.0) {
+                dnsResult = "FAIL";
+            } else if (dnsSpikeAnalysis.isWarn() || failRate > 0) {
+                dnsResult = "WARN";
+            } else {
+                dnsResult = "PASS";
+            }
+        }
 
         System.out.println();
         System.out.println("  ╔══ OVERALL RESULT ══════════════════════════════════════════════════════");
@@ -429,17 +515,19 @@ public class WebsiteReporter {
                 allYtPass ? "PASS" : "FAIL");
         }
         if (webMetrics != null) {
-            System.out.printf("  ║  %-50s  [%s]%n", "Website Performance",
-                anyWebResults && allWebPass ? "PASS" : "FAIL");
+            String webDetail = webInsufficientCycles
+                ? "Website Performance (" + webCycleCount + "/" + expectedWebCycles
+                  + " cycles — insufficient data)"
+                : "Website Performance";
+            System.out.printf("  ║  %-50s  [%s]%n", webDetail, webResult);
         }
         if (dnsResults != null) {
-            System.out.printf("  ║  %-50s  [%s]%n", "DNS Monitoring",
-                anyDnsResults && allDnsPass ? "PASS" : "FAIL");
+            System.out.printf("  ║  %-50s  [%s]%n", "DNS Monitoring", dnsResult);
         }
-        // Overall passes only if every attempted probe passed.
+        // Overall passes only if every attempted probe is PASS or WARN (not FAIL).
         boolean overallPass = (!ytAttempted || allYtPass)
-            && (webMetrics  == null || (anyWebResults && allWebPass))
-            && (dnsResults  == null || (anyDnsResults && allDnsPass));
+            && (webMetrics  == null || !webResult.equals("FAIL"))
+            && (dnsResults  == null || !dnsResult.equals("FAIL"));
         System.out.println("  ╠══════════════════════════════════════════════════════════════════════");
         System.out.printf("  ║  %-50s  [%s]%n", "TEST SUITE RESULT",
             (!ytAttempted && !anyWebResults && !anyDnsResults) ? "N/A" : overallPass ? "PASS" : "FAIL");
@@ -473,8 +561,16 @@ public class WebsiteReporter {
     /**
      * Prints one row per individual DNS query result.
      * PASS if the query succeeded and response time is within the threshold.
+     * Rows above the critical (μ+5σ) threshold are annotated with spike/elevated flags.
+     *
+     * @param domain         the domain name
+     * @param recordType     the DNS record type (A / AAAA)
+     * @param rows           all DNS results for this domain × type
+     * @param criticalMs     the μ+5σ critical threshold in ms
+     * @param spikeAnalysis  pre-computed spike analysis for timestamp-based lookups
      */
-    private void printDnsQueryRows(String domain, String recordType, List<DnsResult> rows) {
+    private void printDnsQueryRows(String domain, String recordType, List<DnsResult> rows,
+                                    double criticalMs, SpikeAnalyzer.Result spikeAnalysis) {
         List<DnsResult> sorted = rows.stream()
             .sorted(java.util.Comparator.comparingLong(DnsResult::getTimestamp)).toList();
         int round = 0;
@@ -484,14 +580,98 @@ public class WebsiteReporter {
             // was present at this moment. Times are true round-trip latency (never 0 ms).
             boolean pass = r.isSuccess();
             String status = pass ? "[PASS]" : "[FAIL]";
-            String reason = r.isSuccess() ? "" :
-                (r.getErrorMessage() != null ? truncate(r.getErrorMessage(), 50) : "resolution failed");
+            String reason;
+            if (!r.isSuccess()) {
+                reason = r.getErrorMessage() != null ? truncate(r.getErrorMessage(), 50) : "resolution failed";
+            } else {
+                long rt = r.getResponseTimeMs();
+                boolean isSpike = spikeAnalysis.isSpikeAt(r.getTimestamp());
+                if (isSpike && rt >= SpikeAnalyzer.DNS_HARD_THRESHOLD_MS) {
+                    reason = "⚡ CRITICAL SPIKE (≥" + SpikeAnalyzer.DNS_HARD_THRESHOLD_MS + " ms)";
+                } else if (isSpike) {
+                    reason = "⚡ spike (>" + String.format("%.0f", criticalMs) + " ms outlier, flagged only)";
+                } else if (rt >= 200) {
+                    reason = "▲ HIGH";
+                } else if (rt >= 50) {
+                    reason = "▲ ELEVATED";
+                } else {
+                    reason = "";
+                }
+            }
             System.out.printf("  %-20s  %-24s  %6d  %8s  %-8s  %s%n",
                 domain, recordType, round,
                 r.getResponseTimeMs() + " ms",
                 status, reason);
         }
         System.out.println("  " + "─".repeat(90));
+    }
+
+    /**
+     * Prints a statistical summary block after all DNS per-round rows.
+     * Shows μ, σ, μ+5σ critical threshold, spike analysis verdict, and
+     * counts of values above the critical line — matching the HTML chart's annotations.
+     */
+    private void printDnsStatsSummary(List<DnsResult> dnsResults,
+                                       StatisticsEngine.Stats overallStats,
+                                       StatisticsEngine.Stats gateStats,
+                                       SpikeAnalyzer.Result spikeAnalysis) {
+        List<DnsResult> succeeded = dnsResults.stream().filter(DnsResult::isSuccess).toList();
+        long total  = dnsResults.size();
+        long failed = dnsResults.stream().filter(r -> !r.isSuccess()).count();
+        double failPct = total == 0 ? 0 : 100.0 * failed / total;
+
+        System.out.println();
+        System.out.println("  ╔══ DNS STATISTICAL SUMMARY ═══════════════════════════════════════════");
+        System.out.printf("  ║  Queries: %d total, %d succeeded, %d failed (%.1f%%)%n",
+            total, succeeded.size(), failed, failPct);
+
+        if (overallStats != null) {
+            double mean    = overallStats.mean;
+            double stddev  = overallStats.stddev;
+            double critical = gateStats != null ? gateStats.ucl(5.0) : mean + 5 * stddev;
+            System.out.printf("  ║  μ = %.0f ms   σ = %.1f ms   μ+5σ Outlier = %.0f ms%s%n",
+                mean, stddev, critical,
+                overallStats.isReliable() ? "" : "  (limited samples — σ-gate widened)");
+            System.out.printf("  ║  Hard threshold (FAIL gate) = %d ms — only spikes ≥ this cause FAIL%n",
+                SpikeAnalyzer.DNS_HARD_THRESHOLD_MS);
+
+            // Count values above the statistical outlier threshold
+            long aboveOutlier = succeeded.stream()
+                .filter(r -> r.getResponseTimeMs() > critical).count();
+            long aboveHard = succeeded.stream()
+                .filter(r -> r.getResponseTimeMs() >= SpikeAnalyzer.DNS_HARD_THRESHOLD_MS).count();
+            long elevated = succeeded.stream()
+                .filter(r -> r.getResponseTimeMs() >= 50 && r.getResponseTimeMs() <= critical).count();
+            if (aboveOutlier > 0) {
+                System.out.printf("  ║  ⚡ %d outlier%s above μ+5σ (%.0f ms)%s%n",
+                    aboveOutlier, aboveOutlier > 1 ? "s" : "", critical,
+                    aboveHard > 0 ? String.format(" — %d critical (≥ %d ms)", aboveHard, SpikeAnalyzer.DNS_HARD_THRESHOLD_MS) : " — all below hard threshold (flagged only)");
+            }
+            if (elevated > 0) {
+                System.out.printf("  ║  ▲ %d elevated value%s (≥ 50 ms)%n",
+                    elevated, elevated > 1 ? "s" : "");
+            }
+        }
+
+        // Spike analysis summary
+        System.out.printf("  ║  Spike analysis: %d spike%s / %d samples (%.1f%%)  →  [%s]%n",
+            spikeAnalysis.totalSpikes,
+            spikeAnalysis.totalSpikes != 1 ? "s" : "",
+            spikeAnalysis.totalSamples,
+            spikeAnalysis.spikeRatePct,
+            spikeAnalysis.verdict);
+        if (spikeAnalysis.reason != null && !spikeAnalysis.reason.isBlank()) {
+            System.out.printf("  ║  Reason: %s%n", spikeAnalysis.reason);
+        }
+        if (spikeAnalysis.hasCluster) {
+            System.out.printf("  ║  Cluster burst detected: %d spikes in 60 s window%n",
+                spikeAnalysis.maxSpikeIn60s);
+        }
+        if (spikeAnalysis.hasPeriodic) {
+            System.out.printf("  ║  Periodic pattern detected (CV = %.2f)%n",
+                spikeAnalysis.interSpikeCV);
+        }
+        System.out.println("  ╚═══════════════════════════════════════════════════════════════════════");
     }
 
     /**

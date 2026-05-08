@@ -15,6 +15,8 @@ import org.openqa.selenium.support.ui.WebDriverWait;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -23,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalDouble;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -42,9 +45,45 @@ public class YouTubePerformanceTester {
 
     private static final Logger logger = LoggerFactory.getLogger(YouTubePerformanceTester.class);
 
-    private static final int SWEEP_INTERVAL_SECONDS  = 5;
-    private static final int PAGE_LOAD_TIMEOUT_SECS  = 45;
-    private static final int ELEMENT_WAIT_SECS       = 15;
+    // ── Probe configuration (loaded from probe-timing.properties) ─────────────
+    private static final int SWEEP_INTERVAL_SECONDS;
+    private static final int PAGE_LOAD_TIMEOUT_SECS;
+    private static final int ELEMENT_WAIT_SECS;
+    private static final int SFN_PANEL_SETTLE_MS;
+    private static final int MAX_AD_ROUNDS;
+    /** Max time to wait for a single ad to resolve (skip or finish). */
+    private static final int MAX_AD_WAIT_MS;
+    /** Poll interval inside the unified ad wait loop. */
+    private static final int AD_POLL_MS;
+    /** Pause between ads to let YouTube load the next one before re-checking. */
+    private static final int AD_TRANSITION_WAIT_MS;
+
+    static {
+        Properties cfg = loadConfig();
+        SWEEP_INTERVAL_SECONDS = Integer.parseInt(cfg.getProperty("youtube.probe.sweep_interval.secs",   "5"));
+        PAGE_LOAD_TIMEOUT_SECS = Integer.parseInt(cfg.getProperty("youtube.probe.page_load_timeout.secs","45"));
+        ELEMENT_WAIT_SECS      = Integer.parseInt(cfg.getProperty("youtube.probe.element_wait.secs",     "15"));
+        SFN_PANEL_SETTLE_MS    = Integer.parseInt(cfg.getProperty("youtube.probe.sfn_panel_settle.ms",   "1200"));
+        MAX_AD_ROUNDS          = Integer.parseInt(cfg.getProperty("youtube.probe.ad.max_rounds",          "5"));
+        MAX_AD_WAIT_MS         = Integer.parseInt(cfg.getProperty("youtube.probe.ad.max_wait.ms",         "45000"));
+        AD_POLL_MS             = Integer.parseInt(cfg.getProperty("youtube.probe.ad.poll.ms",             "500"));
+        AD_TRANSITION_WAIT_MS  = Integer.parseInt(cfg.getProperty("youtube.probe.ad.transition_wait.ms", "2000"));
+    }
+
+    private static Properties loadConfig() {
+        Properties p = new Properties();
+        try (InputStream is = YouTubePerformanceTester.class.getClassLoader()
+                .getResourceAsStream("probe-timing.properties")) {
+            if (is != null) {
+                p.load(is);
+            } else {
+                logger.warn("'probe-timing.properties' not found — using built-in YouTube probe defaults");
+            }
+        } catch (IOException e) {
+            logger.warn("Failed to load 'probe-timing.properties': {} — using built-in defaults", e.getMessage());
+        }
+        return p;
+    }
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -199,7 +238,7 @@ public class YouTubePerformanceTester {
                     // Ensure the Stats for Nerds panel is open before reading — it may have
                     // been closed by a tab switch, ad playback, or quality change since setup.
                     openStatsForNerds(driver, i + 1);
-                    Thread.sleep(1200); // let the panel populate its values (animation + JS render)
+                    Thread.sleep(SFN_PANEL_SETTLE_MS); // let the panel populate its values (animation + JS render)
                     StatsForNerdsData sfn = readStatsForNerds(driver);
                     if (sfn.isAvailable()) {
                         // Average connectionSpeedKbps across all sweep samples instead of using
@@ -479,8 +518,7 @@ public class YouTubePerformanceTester {
     private void dismissConsentDialog(WebDriver driver) {
         try {
             List<WebElement> candidates = driver.findElements(By.cssSelector(
-                "button[aria-label*='Accept all'], button[aria-label*='Agree'], " +
-                "tp-yt-paper-button#agree, .eom-buttons button"
+                BrowserSelectors.CONSENT_DIALOG_CSS
             ));
             for (WebElement btn : candidates) {
                 if (btn.isDisplayed()) { btn.click(); Thread.sleep(600); return; }
@@ -497,7 +535,7 @@ public class YouTubePerformanceTester {
     private void closeOverlayAd(WebDriver driver) {
         try {
             WebElement close = driver.findElement(
-                By.cssSelector(".ytp-ad-overlay-close-button, .ytp-ad-overlay-close-container")
+                By.cssSelector(BrowserSelectors.OVERLAY_AD_CLOSE_CSS)
             );
             if (close.isDisplayed()) { close.click(); Thread.sleep(300); }
         } catch (Exception ignored) {}
@@ -520,14 +558,6 @@ public class YouTubePerformanceTester {
      * next queued ad before we re-check the overlay, bridging the ~300–1500 ms
      * inter-ad gap where the overlay is momentarily absent.
      */
-    private static final int MAX_AD_ROUNDS         = 5;
-    /** Max time to wait for a single ad to resolve (skip or finish). */
-    private static final int MAX_AD_WAIT_MS        = 45_000;
-    /** Poll interval inside the unified ad wait loop. */
-    private static final int AD_POLL_MS            = 500;
-    /** Pause between ads to let YouTube load the next one before re-checking. */
-    private static final int AD_TRANSITION_WAIT_MS = 2_000;
-
     /**
      * Waits for any currently-playing pre-roll or mid-roll ad to finish or be skipped.
      * Iterates up to {@value #MAX_AD_ROUNDS} consecutive ads, polling both the skip
@@ -563,8 +593,7 @@ public class YouTubePerformanceTester {
                 // (YouTube enables skip at 5 s for standard ads, but 10–15 s for others).
                 try {
                     List<WebElement> btns = driver.findElements(By.cssSelector(
-                        ".ytp-skip-ad-button, .ytp-ad-skip-button, " +
-                        ".ytp-skip-ad-button-container button, .ytp-ad-skip-button-container button"
+                        BrowserSelectors.SKIP_AD_CSS
                     ));
                     WebElement visible = btns.stream()
                         .filter(WebElement::isDisplayed)
@@ -608,9 +637,11 @@ public class YouTubePerformanceTester {
     private boolean isAdPlaying(WebDriver driver) {
         try {
             Object result = ((JavascriptExecutor) driver).executeScript(
-                "var p = document.getElementById('movie_player');" +
+                "var p = document.getElementById(arguments[0]);" +
                 "if (p && p.classList.contains('ad-showing')) return true;" +
-                "return !!document.querySelector('.ytp-ad-player-overlay, .ytp-ad-player-overlay-layout');"
+                "return !!document.querySelector(arguments[1]);",
+                BrowserSelectors.MOVIE_PLAYER_ID,
+                BrowserSelectors.AD_PLAYER_OVERLAY_CSS
             );
             return Boolean.TRUE.equals(result);
         } catch (Exception ignored) {
@@ -694,31 +725,20 @@ public class YouTubePerformanceTester {
      */
     private void dismissPauseDialogs(WebDriver driver, int tabIndex) {
         try {
-            Object dismissed = ((JavascriptExecutor) driver).executeScript("""
-                var selectors = [
-                    // "Video paused. Continue watching?" — newer player (2023+)
-                    '.ytp-pause-overlay .ytp-pause-overlay-actions button',
-                    // "Video paused" confirm dialog — older player
-                    '.yt-confirm-dialog-renderer button',
-                    'tp-yt-paper-button.yt-confirm-dialog-renderer--confirm-button',
-                    // "Still watching?" dialog
-                    'button[aria-label*="Continue"], button[aria-label*="Yes"], button[aria-label*="continue"]',
-                    // Any visible dialog confirm/primary button
-                    'yt-confirm-dialog-renderer paper-button[dialog-confirm]',
-                    '#confirm-button'
-                ];
-                for (var i = 0; i < selectors.length; i++) {
-                    var els = document.querySelectorAll(selectors[i]);
-                    for (var j = 0; j < els.length; j++) {
-                        var el = els[j];
-                        if (el.offsetParent !== null) { // visible check
-                            el.click();
-                            return selectors[i];
-                        }
-                    }
-                }
-                return null;
-                """);
+            // Build the JS selectors array from the configured BrowserSelectors constants
+            // so the selector list can be updated in browser-selectors.properties without
+            // touching Java code.
+            String selectorsJsArray = BrowserSelectors.toJsArray(BrowserSelectors.PAUSE_DIALOG_SELECTORS);
+            Object dismissed = ((JavascriptExecutor) driver).executeScript(
+                "var selectors = " + selectorsJsArray + ";" +
+                "for (var i = 0; i < selectors.length; i++) {" +
+                "    var els = document.querySelectorAll(selectors[i]);" +
+                "    for (var j = 0; j < els.length; j++) {" +
+                "        var el = els[j];" +
+                "        if (el.offsetParent !== null) { el.click(); return selectors[i]; }" +
+                "    }" +
+                "}" +
+                "return null;");
             if (dismissed != null) {
                 logger.info("[Tab-{}] Dismissed pause/interrupt dialog ({})", tabIndex, dismissed);
                 Thread.sleep(400);
@@ -734,15 +754,15 @@ public class YouTubePerformanceTester {
      */
     private void setHighestQuality(WebDriver driver, int tabIndex) {
         try {
-            Object result = ((JavascriptExecutor) driver).executeScript("""
-                var player = document.getElementById('movie_player');
-                if (!player || typeof player.getAvailableQualityLevels !== 'function') return 'no-player';
-                var levels = player.getAvailableQualityLevels();
-                if (!levels || levels.length === 0) return 'no-levels';
-                var best = levels[0]; // YouTube returns levels sorted highest-first
-                player.setPlaybackQualityRange(best, best);
-                return 'set:' + best;
-                """);
+            Object result = ((JavascriptExecutor) driver).executeScript(
+                "var player = document.getElementById(arguments[0]);" +
+                "if (!player || typeof player.getAvailableQualityLevels !== 'function') return 'no-player';" +
+                "var levels = player.getAvailableQualityLevels();" +
+                "if (!levels || levels.length === 0) return 'no-levels';" +
+                "var best = levels[0];" + // YouTube returns levels sorted highest-first
+                "player.setPlaybackQualityRange(best, best);" +
+                "return 'set:' + best;",
+                BrowserSelectors.MOVIE_PLAYER_ID);
             logger.info("[Tab-{}] Quality set to: {}", tabIndex, result);
         } catch (Exception e) {
             logger.debug("[Tab-{}] setHighestQuality (non-fatal): {}", tabIndex, e.getMessage());
@@ -779,24 +799,24 @@ public class YouTubePerformanceTester {
         // attempt below reaches Attempt 2 (right-click context menu), which TOGGLES
         // the panel — closing it if it was already open.
         try {
-            Boolean alreadyVisible = (Boolean) ((JavascriptExecutor) driver).executeScript("""
-                // Strategy A: known container selectors
-                var sfnPanel = document.querySelector(
-                    '.ytp-sfn-stats, [class*="sfn-stats"], .html5-video-info-panel, [class*="video-info-panel"]');
-                if (sfnPanel) {
-                    var cs = window.getComputedStyle(sfnPanel);
-                    if (cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity) > 0)
-                        return true;
-                }
+            Boolean alreadyVisible = (Boolean) ((JavascriptExecutor) driver).executeScript(
+                // Strategy A: known container selectors (from BrowserSelectors.SFN_PANEL_CSS)
+                "var sfnPanel = document.querySelector(arguments[0]);" +
+                "if (sfnPanel) {" +
+                "    var cs = window.getComputedStyle(sfnPanel);" +
+                "    if (cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity) > 0)" +
+                "        return true;" +
+                "}" +
                 // Strategy B: label elements visible (panel open but container class unknown)
-                var labelEls = document.querySelectorAll(
-                    '.ytp-sfn-label, [class*="sfn-label"], [class*="sfn"][class*="label"]');
-                for (var i = 0; i < labelEls.length; i++) {
-                    var cs2 = window.getComputedStyle(labelEls[i]);
-                    if (cs2.display !== 'none' && cs2.visibility !== 'hidden') return true;
-                }
-                return false;
-                """);
+                "var labelEls = document.querySelectorAll(arguments[1]);" +
+                "for (var i = 0; i < labelEls.length; i++) {" +
+                "    var cs2 = window.getComputedStyle(labelEls[i]);" +
+                "    if (cs2.display !== 'none' && cs2.visibility !== 'hidden') return true;" +
+                "}" +
+                "return false;",
+                BrowserSelectors.SFN_PANEL_CSS,
+                BrowserSelectors.SFN_LABEL_CSS
+            );
             if (Boolean.TRUE.equals(alreadyVisible)) {
                 logger.debug("[Tab-{}] SFN panel already visible — skipping open", tabIndex);
                 return;
@@ -807,59 +827,45 @@ public class YouTubePerformanceTester {
 
         // ── Attempt 1: JavaScript toggle via player option ───────────────────
         try {
-            Object opened = ((JavascriptExecutor) driver).executeScript("""
-                var player = document.getElementById('movie_player');
-                if (!player) return 'no-player';
-
+            Object opened = ((JavascriptExecutor) driver).executeScript(
+                "var player = document.getElementById(arguments[0]);" +
+                "if (!player) return 'no-player';" +
                 // Try player.getOption / setOption API (available in some YT builds)
-                if (typeof player.setOption === 'function') {
-                    try {
-                        player.setOption('statsText', 'show');
-                        return 'setOption-show';
-                    } catch(e) {}
-                }
-
+                "if (typeof player.setOption === 'function') {" +
+                "    try { player.setOption('statsText', 'show'); return 'setOption-show'; } catch(e) {}" +
+                "}" +
                 // Try direct module access to the stats panel
-                if (typeof player.getModule === 'function') {
-                    try {
-                        var statsModule = player.getModule('stats');
-                        if (statsModule && typeof statsModule.show === 'function') {
-                            statsModule.show();
-                            return 'module-show';
-                        }
-                    } catch(e) {}
-                }
-
+                "if (typeof player.getModule === 'function') {" +
+                "    try {" +
+                "        var statsModule = player.getModule('stats');" +
+                "        if (statsModule && typeof statsModule.show === 'function') {" +
+                "            statsModule.show(); return 'module-show';" +
+                "        }" +
+                "    } catch(e) {}" +
+                "}" +
                 // Try yt.config_ flag as a last JS resort
-                try {
-                    if (window.yt && window.yt.config_) {
-                        window.yt.config_['SHOW_STATS_FOR_NERDS'] = true;
-                    }
-                } catch(e) {}
-
-                return 'not-toggled';
-                """);
+                "try { if (window.yt && window.yt.config_) window.yt.config_['SHOW_STATS_FOR_NERDS'] = true; } catch(e) {}" +
+                "return 'not-toggled';",
+                BrowserSelectors.MOVIE_PLAYER_ID
+            );
             logger.debug("[Tab-{}] SFN JS toggle: {}", tabIndex, opened);
 
-            // Check if it opened — use the same broad multi-strategy check as the pre-check
-            // above so a generic container class doesn't cause a false-negative here and
-            // send us into the right-click toggle path.
-            Boolean isOpen = (Boolean) ((JavascriptExecutor) driver).executeScript("""
-                var sfnPanel = document.querySelector(
-                    '.ytp-sfn-stats, [class*="sfn-stats"], .html5-video-info-panel, [class*="video-info-panel"]');
-                if (sfnPanel) {
-                    var cs = window.getComputedStyle(sfnPanel);
-                    if (cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity) > 0)
-                        return true;
-                }
-                var labelEls = document.querySelectorAll(
-                    '.ytp-sfn-label, [class*="sfn-label"], [class*="sfn"][class*="label"]');
-                for (var i = 0; i < labelEls.length; i++) {
-                    var cs2 = window.getComputedStyle(labelEls[i]);
-                    if (cs2.display !== 'none' && cs2.visibility !== 'hidden') return true;
-                }
-                return false;
-                """);
+            // Check if it opened — same broad multi-strategy check as the pre-check above.
+            Boolean isOpen = (Boolean) ((JavascriptExecutor) driver).executeScript(
+                "var sfnPanel = document.querySelector(arguments[0]);" +
+                "if (sfnPanel) {" +
+                "    var cs = window.getComputedStyle(sfnPanel);" +
+                "    if (cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity) > 0) return true;" +
+                "}" +
+                "var labelEls = document.querySelectorAll(arguments[1]);" +
+                "for (var i = 0; i < labelEls.length; i++) {" +
+                "    var cs2 = window.getComputedStyle(labelEls[i]);" +
+                "    if (cs2.display !== 'none' && cs2.visibility !== 'hidden') return true;" +
+                "}" +
+                "return false;",
+                BrowserSelectors.SFN_PANEL_CSS,
+                BrowserSelectors.SFN_LABEL_CSS
+            );
             if (Boolean.TRUE.equals(isOpen)) {
                 logger.info("[Tab-{}] Stats for Nerds panel opened via JS", tabIndex);
                 return;
@@ -870,7 +876,7 @@ public class YouTubePerformanceTester {
 
         // ── Attempt 2: Right-click context menu ──────────────────────────────
         try {
-            WebElement player = driver.findElement(By.id("movie_player"));
+            WebElement player = driver.findElement(By.id(BrowserSelectors.MOVIE_PLAYER_ID));
             new Actions(driver).contextClick(player).perform();
             Thread.sleep(600);
 
@@ -881,8 +887,7 @@ public class YouTubePerformanceTester {
                 .ignoring(NoSuchElementException.class)
                 .until(d -> {
                     List<WebElement> items = d.findElements(
-                        By.cssSelector(".ytp-contextmenu .ytp-menuitem-label," +
-                                       ".ytp-contextmenu .ytp-menuitem"));
+                        By.cssSelector(BrowserSelectors.CONTEXT_MENU_ITEM_CSS));
                     return items.stream()
                         .filter(el -> el.getText().toLowerCase().contains("stats for nerds"))
                         .findFirst()
@@ -930,83 +935,65 @@ public class YouTubePerformanceTester {
     StatsForNerdsData readStatsForNerds(WebDriver driver) {
         StatsForNerdsData sfn = new StatsForNerdsData();
         try {
+            // Build the JS arrays from BrowserSelectors so selector strings are
+            // centralised in browser-selectors.properties and never embedded here.
+            String knownLabelsJs    = BrowserSelectors.toJsArray(BrowserSelectors.SFN_KNOWN_LABELS);
+            String panelFallbacksJs = BrowserSelectors.toJsArray(BrowserSelectors.SFN_PANEL_FALLBACK_SELECTORS);
+
             @SuppressWarnings("unchecked")
             Map<String, String> panelRows = (Map<String, String>)
-                ((JavascriptExecutor) driver).executeScript("""
-                    var result = {};
-
+                ((JavascriptExecutor) driver).executeScript(
+                    "var result = {};" +
                     // Strategy 1: direct label/value class search — works regardless of the
                     // panel container class (YouTube may wrap it in a generic ytp-panel div).
-                    var labelEls = document.querySelectorAll(
-                        '.ytp-sfn-label, [class*="sfn-label"], [class*="sfn"][class*="label"]');
-                    labelEls.forEach(function(labelEl) {
-                        var row = labelEl.closest('tr') || labelEl.parentElement;
-                        var valueEl = row ? (row.querySelector(
-                            '.ytp-sfn-value, [class*="sfn-value"], [class*="sfn"][class*="value"]')
-                            || labelEl.nextElementSibling) : null;
-                        if (valueEl) {
-                            result[labelEl.textContent.trim()] = valueEl.textContent.trim();
-                        }
-                    });
-                    if (Object.keys(result).length > 0) return result;
-
+                    // arguments[0] = SFN_LABEL_CSS, arguments[1] = SFN_VALUE_CSS
+                    "var labelEls = document.querySelectorAll(arguments[0]);" +
+                    "labelEls.forEach(function(labelEl) {" +
+                    "    var row = labelEl.closest('tr') || labelEl.parentElement;" +
+                    "    var valueEl = row ? (row.querySelector(arguments[1]) || labelEl.nextElementSibling) : null;" +
+                    "    if (valueEl) { result[labelEl.textContent.trim()] = valueEl.textContent.trim(); }" +
+                    "});" +
+                    "if (Object.keys(result).length > 0) return result;" +
                     // Strategy 2: XPath text-content search for well-known SFN row labels.
-                    // This is completely independent of CSS class names.
-                    var knownLabels = [
-                        'Connection Speed', 'Buffer Health', 'Network Activity',
-                        'Current / Optimal Res', 'Codecs', 'Frames', 'Viewport / Frames'
-                    ];
-                    knownLabels.forEach(function(name) {
-                        var xr = document.evaluate(
-                            "//*[normalize-space(text())='" + name + "']",
-                            document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                        var labelNode = xr.singleNodeValue;
-                        if (labelNode) {
-                            var valueNode = labelNode.nextElementSibling ||
-                                (labelNode.parentElement
-                                    ? labelNode.parentElement.nextElementSibling : null);
-                            if (valueNode) result[name] = valueNode.textContent.trim();
-                        }
-                    });
-                    if (Object.keys(result).length > 0) return result;
-
+                    // Completely independent of CSS class names.
+                    "var knownLabels = " + knownLabelsJs + ";" +
+                    "knownLabels.forEach(function(name) {" +
+                    "    var xr = document.evaluate(\"//*[normalize-space(text())='\" + name + \"']\"," +
+                    "        document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);" +
+                    "    var labelNode = xr.singleNodeValue;" +
+                    "    if (labelNode) {" +
+                    "        var valueNode = labelNode.nextElementSibling ||" +
+                    "            (labelNode.parentElement ? labelNode.parentElement.nextElementSibling : null);" +
+                    "        if (valueNode) result[name] = valueNode.textContent.trim();" +
+                    "    }" +
+                    "});" +
+                    "if (Object.keys(result).length > 0) return result;" +
                     // Strategy 3: panel-container search using multiple known class patterns,
                     // skipping visibility gate since we just opened the panel moments ago.
-                    var panelSels = [
-                        '.ytp-sfn-stats',
-                        '.html5-video-info-panel',
-                        '[class*="sfn-stats"]',
-                        '[class*="sfn"]',
-                        '[class*="video-info-panel"]'
-                    ];
-                    var panel = null;
-                    for (var si = 0; si < panelSels.length; si++) {
-                        panel = document.querySelector(panelSels[si]);
-                        if (panel) break;
-                    }
-                    if (panel) {
-                        // Try structured tr rows first
-                        panel.querySelectorAll('tr').forEach(function(row) {
-                            var cells = row.querySelectorAll('td, th');
-                            if (cells.length >= 2) {
-                                result[cells[0].textContent.trim()] = cells[1].textContent.trim();
-                            }
-                        });
-                        // Fallback: consecutive non-empty leaf-text pairs
-                        if (Object.keys(result).length === 0) {
-                            var leaves = panel.querySelectorAll('td, th, span');
-                            var prev = null;
-                            leaves.forEach(function(el) {
-                                if (el.children.length > 0) return; // skip non-leaf
-                                var txt = el.textContent.trim();
-                                if (!txt) return;
-                                if (prev !== null) { result[prev] = txt; prev = null; }
-                                else { prev = txt; }
-                            });
-                        }
-                    }
-                    return Object.keys(result).length > 0 ? result : null;
-                    """);
+                    "var panelSels = " + panelFallbacksJs + ";" +
+                    "var panel = null;" +
+                    "for (var si = 0; si < panelSels.length; si++) {" +
+                    "    panel = document.querySelector(panelSels[si]); if (panel) break;" +
+                    "}" +
+                    "if (panel) {" +
+                    "    panel.querySelectorAll('tr').forEach(function(row) {" +
+                    "        var cells = row.querySelectorAll('td, th');" +
+                    "        if (cells.length >= 2) { result[cells[0].textContent.trim()] = cells[1].textContent.trim(); }" +
+                    "    });" +
+                    "    if (Object.keys(result).length === 0) {" +
+                    "        var leaves = panel.querySelectorAll('td, th, span');" +
+                    "        var prev = null;" +
+                    "        leaves.forEach(function(el) {" +
+                    "            if (el.children.length > 0) return;" +
+                    "            var txt = el.textContent.trim(); if (!txt) return;" +
+                    "            if (prev !== null) { result[prev] = txt; prev = null; } else { prev = txt; }" +
+                    "        });" +
+                    "    }" +
+                    "}" +
+                    "return Object.keys(result).length > 0 ? result : null;",
+                    BrowserSelectors.SFN_LABEL_CSS,
+                    BrowserSelectors.SFN_VALUE_CSS
+                );
 
             logger.debug("readStatsForNerds raw JS result: {}", panelRows);
             if (panelRows == null || panelRows.isEmpty()) return sfn;
@@ -1101,7 +1088,9 @@ public class YouTubePerformanceTester {
             @SuppressWarnings("unchecked")
             Map<String, Object> data = (Map<String, Object>)
                 ((JavascriptExecutor) driver).executeScript(networkSampleScript(),
-                    (long)(SWEEP_INTERVAL_SECONDS * 1000));
+                    (long)(SWEEP_INTERVAL_SECONDS * 1000),
+                    BrowserSelectors.AD_PLAYER_OVERLAY_CSS,
+                    BrowserSelectors.MOVIE_PLAYER_ID);
 
             if (data != null) {
                 sample.setTotalSegmentBytes(toLong(data.get("totalSegmentBytes")));
@@ -1134,6 +1123,8 @@ public class YouTubePerformanceTester {
     private String networkSampleScript() {
         return """
             var windowMs = arguments[0];
+            var adOverlayCss  = arguments[1];
+            var playerElemId  = arguments[2];
             var result = {};
             try {
                 var now = performance.now();
@@ -1159,12 +1150,11 @@ public class YouTubePerformanceTester {
                 }
             } catch(e) {}
             try {
-                var player = document.getElementById('movie_player');
+                var player = document.getElementById(playerElemId);
                 // Check whether an ad is currently playing before reading quality.
                 // Ads stream at 'medium'/'small' regardless of connection speed;
                 // including that reading would falsely flag a quality degradation.
-                // Detection: the ad overlay element is present and visible.
-                var adOverlay = document.querySelector('.ytp-ad-player-overlay, .ytp-ad-player-overlay-layout');
+                var adOverlay = document.querySelector(adOverlayCss);
                 var adActive = !!(adOverlay && adOverlay.offsetParent !== null);
                 result.adPlaying = adActive;
                 if (!adActive && player && typeof player.getPlaybackQuality === 'function') {

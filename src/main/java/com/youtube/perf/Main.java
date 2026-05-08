@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit;
  *   2. Website tester             — one Chrome, M website tabs, refresh every 5 s
  *   3. DNS monitor                — direct UDP queries to 8.8.8.8 throughout the window
  *
- * URLs, domains, and duration are loaded from {@code src/main/resources/test.properties}.
+ * URLs, domains, and duration are loaded from {@code src/main/resources/monitor-targets.properties}.
  * Duration can also be supplied on the command line: {@code --duration <seconds>}.
  */
 public class Main {
@@ -32,15 +32,15 @@ public class Main {
      * Results from all three probes are collected and printed as a combined final report.
      *
      * @param args command-line arguments; {@code --duration <seconds>} overrides the
-     *             {@code test.duration.seconds} value from {@code test.properties}
+     *             {@code test.duration.seconds} value from {@code monitor-targets.properties}
      */
     public static void main(String[] args) {
-        // Load configuration from test.properties (CLI --duration overrides file value)
+        // Load configuration from monitor-targets.properties and website-thresholds.properties
         TestConfig config;
         try {
             config = TestConfig.load(args);
         } catch (IOException e) {
-            System.err.println("[ERROR] Failed to load test.properties: " + e.getMessage());
+            System.err.println("[ERROR] Failed to load configuration: " + e.getMessage());
             System.exit(1);
             return;
         }
@@ -250,11 +250,10 @@ public class Main {
         if (liveYt != null && !liveYt.isEmpty()) {
             PerformanceReporter reporter = new PerformanceReporter();
             reporter.printConsoleReport(liveYt);
-            reporter.saveCsvReport(liveYt, "youtube_performance_report.csv");
             reporter.saveJsonReport(liveYt, "youtube_performance_report.json");
         }
 
-        WebsiteReporter websiteReporter = new WebsiteReporter(config::getThresholds);
+        WebsiteReporter websiteReporter = new WebsiteReporter(config::getThresholds, durationSeconds);
 
         if (liveWeb != null && !liveWeb.isEmpty()) {
             websiteReporter.printWebsiteReport(liveWeb);
@@ -267,7 +266,13 @@ public class Main {
         List<VideoVerdict> verdicts = (liveYt != null && !liveYt.isEmpty())
             ? new PerformanceEvaluator().evaluateAll(liveYt)
             : (liveYt != null ? java.util.Collections.emptyList() : null);
-        websiteReporter.printFinalSummary(verdicts, liveWeb, liveDns);
+        SpikeAnalyzer.Result dnsSpike = (liveDns != null && !liveDns.isEmpty())
+            ? SpikeAnalyzer.analyzeDns(liveDns)
+            : SpikeAnalyzer.analyzeDns(java.util.List.of());
+        SpikeAnalyzer.Result webSpike = (liveWeb != null && !liveWeb.isEmpty())
+            ? SpikeAnalyzer.analyzeWebsite(liveWeb, config::getThresholds)
+            : SpikeAnalyzer.analyzeWebsite(java.util.List.of(), config::getThresholds);
+        websiteReporter.printFinalSummary(verdicts, liveWeb, liveDns, dnsSpike, webSpike);
 
         // ── HTML report ───────────────────────────────────────────────────────
         // Always write into target/ so the report sits alongside the JAR and
@@ -275,7 +280,11 @@ public class Main {
         java.nio.file.Path targetDir = java.nio.file.Paths.get("target");
         try { java.nio.file.Files.createDirectories(targetDir); } catch (Exception ignored) {}
         String htmlPath = targetDir.resolve("net_performance_report.html").toString();
-        new HtmlReporter(config::getThresholds).saveReport(liveYt, liveWeb, liveDns, verdicts, htmlPath);
+        new HtmlReporter(config::getThresholds, durationSeconds).saveReport(liveYt, liveWeb, liveDns, verdicts, htmlPath);
+
+        // Comprehensive CSV covering all probes — saved alongside the HTML report
+        String csvPath = targetDir.resolve("net_performance_report.csv").toString();
+        new PerformanceReporter().saveFullCsvReport(liveYt, liveWeb, liveDns, csvPath);
 
         logger.info("All probes complete.");
     }

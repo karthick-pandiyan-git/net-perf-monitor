@@ -16,8 +16,14 @@ import java.util.Properties;
 import java.util.Set;
 
 /**
- * Loads {@code test.properties} from the classpath and exposes the configured
+ * Loads probe configuration from the classpath and exposes the configured
  * YouTube URLs, website URLs, DNS domains, and monitoring duration.
+ *
+ * <p>Configuration is split across two files:
+ * <ul>
+ *   <li>{@code monitor-targets.properties} — what to monitor (URLs, domains, duration)</li>
+ *   <li>{@code website-thresholds.properties} — website quality evaluation thresholds</li>
+ * </ul>
  *
  * <p>The monitoring duration can be overridden at runtime with the
  * {@code --duration <seconds>} command-line flag; the property file value
@@ -27,8 +33,9 @@ public class TestConfig {
 
     private static final Logger logger = LoggerFactory.getLogger(TestConfig.class);
 
-    private static final String PROPERTIES_FILE  = "test.properties";
-    private static final int    MIN_DURATION_SECS = 30;
+    private static final String TARGETS_FILE          = "monitor-targets.properties";
+    private static final String WEBSITE_THRESHOLDS_FILE = "website-thresholds.properties";
+    private static final int    MIN_DURATION_SECS        = 30;
 
     /** Probe names recognised by {@code --mode} (after normalising {@code youtube_N} → "youtube"). */
     private static final Set<String> VALID_PROBES = Set.of("youtube", "website", "dns");
@@ -47,7 +54,7 @@ public class TestConfig {
     private final Set<String>  mode;
     /**
      * Number of YouTube URLs (tabs) to actually stream.  The full list in
-     * {@code test.properties} may be longer; only the first {@code youtubeCount}
+     * {@code monitor-targets.properties} may be longer; only the first {@code youtubeCount}
      * entries are used.  Set via {@code youtube_N} in {@code --mode}; defaults
      * to {@value DEFAULT_YOUTUBE_COUNT} when the count suffix is omitted.
      */
@@ -94,23 +101,19 @@ public class TestConfig {
     // ── Factory ──────────────────────────────────────────────────────────────
 
     /**
-     * Loads {@code test.properties} from the classpath and applies any
+     * Loads probe configuration from the classpath and applies any
      * {@code --duration} override found in {@code args}.
+     *
+     * <p>Reads {@code monitor-targets.properties} (URLs, domains, duration) and
+     * {@code website-thresholds.properties} (evaluation thresholds) and merges
+     * them into a single {@link Properties} object for uniform key lookup.
      *
      * @param args command-line arguments from {@code main(String[] args)}
      * @return fully populated {@link TestConfig}
-     * @throws IOException if the properties file cannot be found or read
+     * @throws IOException if either properties file cannot be found or read
      */
     public static TestConfig load(String[] args) throws IOException {
-        Properties props = new Properties();
-        try (InputStream is = TestConfig.class.getClassLoader()
-                .getResourceAsStream(PROPERTIES_FILE)) {
-            if (is == null) {
-                throw new IOException("Cannot find '" + PROPERTIES_FILE
-                    + "' on the classpath. Make sure it exists under src/main/resources/.");
-            }
-            props.load(is);
-        }
+        Properties props = loadConfigFiles(TARGETS_FILE, WEBSITE_THRESHOLDS_FILE);
 
         List<String> allYoutubeUrls = loadNumberedList(props, "youtube.url.");
         List<String> websiteUrls     = loadNumberedList(props, "website.url.");
@@ -118,7 +121,7 @@ public class TestConfig {
 
         // Parse default duration from properties file
         int defaultDuration = parseIntProp(props, "test.duration.seconds", 30);
-        int durationSeconds = clampDuration(defaultDuration, "test.properties");
+        int durationSeconds = clampDuration(defaultDuration, TARGETS_FILE);
 
         // --duration CLI flag overrides the property file value
         durationSeconds = applyCliDuration(args, durationSeconds);
@@ -219,6 +222,29 @@ public class TestConfig {
         return siteThresholds.getOrDefault(domain, defaultThresholds);
     }
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Loads each named resource file from the classpath in order and merges
+     * all entries into a single {@link Properties} object.  Later files can
+     * override earlier ones (though in practice the two config files have
+     * disjoint key spaces).
+     *
+     * @throws IOException if any file is missing from the classpath
+     */
+    private static Properties loadConfigFiles(String... fileNames) throws IOException {
+        Properties props = new Properties();
+        for (String fileName : fileNames) {
+            try (InputStream is = TestConfig.class.getClassLoader()
+                    .getResourceAsStream(fileName)) {
+                if (is == null) {
+                    throw new IOException("Cannot find '" + fileName
+                        + "' on the classpath. Make sure it exists under src/main/resources/.");
+                }
+                props.load(is);
+            }
+        }
+        return props;
+    }
 
     /**
      * Collects all values whose key matches {@code prefix + N} for N = 1, 2, …
@@ -414,7 +440,7 @@ public class TestConfig {
      *   <li>the mode contains {@code "youtube"} without a count suffix.</li>
      * </ul>
      * The returned count is capped to {@code availableCount} so we never request
-     * more tabs than there are URLs in {@code test.properties}.
+     * more tabs than there are URLs in {@code monitor-targets.properties}.
      *
      * @param args           command-line arguments from {@code main}
      * @param availableCount total number of YouTube URLs in the properties file

@@ -10,7 +10,7 @@ package com.youtube.perf;
  *
  * <p>The default values match the historical static constants used before
  * per-site configuration was introduced. Override them per domain in
- * {@code test.properties} using keys of the form:</p>
+ * {@code website-thresholds.properties} using keys of the form:</p>
  * <pre>
  *   website.threshold.&lt;domain&gt;.pageload.warm.ms=8000
  *   website.threshold.&lt;domain&gt;.pageload.cold.ms=12000
@@ -22,7 +22,7 @@ public class WebsiteThresholds {
 
     /**
      * Default thresholds applied to all websites that do not have a per-site
-     * override configured in {@code test.properties}.
+     * override configured in {@code website-thresholds.properties}.
      */
     public static final WebsiteThresholds DEFAULT =
         new WebsiteThresholds(5_000, 8_000, 1_200, 2_000);

@@ -13,10 +13,13 @@ import org.openqa.selenium.support.ui.WebDriverWait;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -39,13 +42,36 @@ public class WebsiteTester implements Callable<List<WebsiteMetrics>> {
 
     private static final Logger logger = LoggerFactory.getLogger(WebsiteTester.class);
 
-    private static final int CYCLE_INTERVAL_MS         = 5_000;
+    // ── Probe configuration (loaded from probe-timing.properties) ─────────────
+    private static final int CYCLE_INTERVAL_MS;
     // Initial tab open (cold load: uncached DNS, new TLS, full JS bundle download).
-    // Heavy sites like Amazon/Facebook regularly take 8–15 s on first load.
-    private static final int PAGE_LOAD_TIMEOUT_COLD_SECS = 45;
+    private static final int PAGE_LOAD_TIMEOUT_COLD_SECS;
     // Warm cycle limit — tabs are already open and connections are reused.
-    private static final int PAGE_LOAD_TIMEOUT_SECS      = 30;
-    private static final int ELEMENT_WAIT_SECS           = 15;
+    private static final int PAGE_LOAD_TIMEOUT_SECS;
+    private static final int ELEMENT_WAIT_SECS;
+
+    static {
+        Properties cfg = loadConfig();
+        CYCLE_INTERVAL_MS           = Integer.parseInt(cfg.getProperty("website.probe.cycle_interval.ms",             "5000"));
+        PAGE_LOAD_TIMEOUT_COLD_SECS = Integer.parseInt(cfg.getProperty("website.probe.page_load_timeout_cold.secs",   "45"));
+        PAGE_LOAD_TIMEOUT_SECS      = Integer.parseInt(cfg.getProperty("website.probe.page_load_timeout_warm.secs",   "30"));
+        ELEMENT_WAIT_SECS           = Integer.parseInt(cfg.getProperty("website.probe.element_wait.secs",             "15"));
+    }
+
+    private static Properties loadConfig() {
+        Properties p = new Properties();
+        try (InputStream is = WebsiteTester.class.getClassLoader()
+                .getResourceAsStream("probe-timing.properties")) {
+            if (is != null) {
+                p.load(is);
+            } else {
+                logger.warn("'probe-timing.properties' not found — using built-in website probe defaults");
+            }
+        } catch (IOException e) {
+            logger.warn("Failed to load 'probe-timing.properties': {} — using built-in defaults", e.getMessage());
+        }
+        return p;
+    }
 
     private final List<String> urls;
     private final CountDownLatch startLatch;

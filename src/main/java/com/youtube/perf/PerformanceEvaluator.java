@@ -1,7 +1,13 @@
 package com.youtube.perf;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
 import java.util.stream.Collectors;
 
 /**
@@ -18,54 +24,76 @@ import java.util.stream.Collectors;
  * reflect device/codec behaviour, not network performance. Resolution IS included
  * (check 7) because YouTube's adaptive bitrate (ABR) algorithm downgrades quality
  * specifically when bandwidth is insufficient, making it a direct network indicator.
+ *
+ * All pass/fail thresholds are loaded from {@code youtube-thresholds.properties}
+ * on the classpath; see that file for per-value documentation.
  */
 public class PerformanceEvaluator {
 
-    // ── Internet-performance thresholds ──────────────────────────────────────
+    private static final Logger logger = LoggerFactory.getLogger(PerformanceEvaluator.class);
 
-    /**
-     * Page load threshold for warm connections (tabs 2+).
-     * Raised to 12 s to accommodate heavy pages such as 8K YouTube videos whose
-     * initial segment fetch inflates the Navigation Timing load event. A genuine
-     * connectivity problem will still show up in TTFB and bandwidth checks.
-     */
-    private static final long MAX_PAGE_LOAD_MS      = 12_000;
-    /**
-     * Cold page load threshold for Tab 1.
-     * Tab 1 loads the page without any browser or OS DNS cache, requiring a full
-     * TCP/TLS handshake and fresh resource downloads. 15 s covers real-world
-     * cold-start variance without masking genuinely broken connections.
-     */
-    private static final long MAX_PAGE_LOAD_COLD_MS = 15_000;
+    // ── Internet-performance thresholds (loaded from youtube-thresholds.properties) ──
 
+    /** Page load threshold for warm connections (tabs 2+). */
+    static final long MAX_PAGE_LOAD_MS;
+    /** Cold page load threshold for Tab 1 (fresh DNS + new TCP/TLS handshake). */
+    static final long MAX_PAGE_LOAD_COLD_MS;
+    /** TTFB threshold for warm connections (tabs 2+). */
+    static final long MAX_TTFB_MS;
+    /** TTFB threshold for Tab 1 (cold-connection penalty). */
+    static final long MAX_TTFB_COLD_MS;
+    /** Minimum seconds of pre-loaded video ahead of the current playhead. */
+    static final double MIN_BUFFERED_SECS;
     /**
-     * TTFB thresholds.
-     * Tab 1 pays a cold-connection penalty (uncached DNS, new TCP+TLS handshake).
-     * All other tabs reuse warm HTTP/2 connections to YouTube's CDN.
-     * 1500 ms warm threshold accommodates normal CDN latency variation;
-     * at > 1500 ms the connection latency is consistently affecting streaming.
+     * Sigma multiplier (k) for the buffer-depth consistency lower-control-limit:
+     * {@code mean - k*stddev} must stay above {@link #MIN_BUFFERED_SECS}.
      */
-    private static final long MAX_TTFB_MS      = 1_500;
-    private static final long MAX_TTFB_COLD_MS = 3_000;
-
+    static final double BUFFER_CONSISTENCY_LCL_SIGMA;
+    /** Minimum average bandwidth (KB/s) across the monitoring window. */
+    static final double MIN_AVG_BANDWIDTH_KBPS;
+    /** Below this average KB/s the player is considered "pre-buffered". */
+    static final double PRE_BUFFERED_BANDWIDTH_THRESHOLD_KBPS;
+    /** Minimum total bytes fetched for the pre-buffered special-case to apply. */
+    static final long   PRE_BUFFERED_MIN_TOTAL_BYTES;
+    /** Minimum connection speed (Kbps) from YouTube's Stats-for-Nerds panel. */
+    static final double MIN_SFN_CONNECTION_SPEED_KBPS;
     /**
-     * Buffer depth: seconds of video pre-loaded beyond the current playhead.
-     * < 10 s means the connection is barely keeping up with real-time playback.
+     * Number of <em>consecutive</em> sweeps with buffer health == 0 s required
+     * to trigger a FAIL on the SFN Buffer Health check.  A single isolated 0 s
+     * reading is treated as a transient glitch; only a sustained drain across
+     * this many back-to-back sweeps is considered a genuine stall.
      */
-    private static final double MIN_BUFFERED_SECS = 10.0;
+    static final int SFN_BUF_HEALTH_CONSEC_ZERO_FAIL;
 
-    /**
-     * Minimum connection speed (in Kbps) as reported by YouTube's Stats for Nerds panel.
-     * 2500 Kbps = 2.5 Mbps, the minimum YouTube recommends for sustained HD (720p) streaming.
-     */
-    private static final double MIN_SFN_CONNECTION_SPEED_KBPS = 2500.0;
+    static {
+        Properties cfg = loadConfig();
+        MAX_PAGE_LOAD_MS                    = Long.parseLong(cfg.getProperty(  "youtube.eval.page_load.warm.ms",               "12000"));
+        MAX_PAGE_LOAD_COLD_MS               = Long.parseLong(cfg.getProperty(  "youtube.eval.page_load.cold.ms",               "15000"));
+        MAX_TTFB_MS                         = Long.parseLong(cfg.getProperty(  "youtube.eval.ttfb.warm.ms",                    "1500"));
+        MAX_TTFB_COLD_MS                    = Long.parseLong(cfg.getProperty(  "youtube.eval.ttfb.cold.ms",                    "3000"));
+        MIN_BUFFERED_SECS                   = Double.parseDouble(cfg.getProperty("youtube.eval.buffer.min_depth.secs",         "10.0"));
+        BUFFER_CONSISTENCY_LCL_SIGMA        = Double.parseDouble(cfg.getProperty("youtube.eval.buffer.consistency_lcl_sigma",  "1.0"));
+        MIN_AVG_BANDWIDTH_KBPS              = Double.parseDouble(cfg.getProperty("youtube.eval.bandwidth.min_avg.kbps",        "250.0"));
+        PRE_BUFFERED_BANDWIDTH_THRESHOLD_KBPS = Double.parseDouble(cfg.getProperty("youtube.eval.bandwidth.prebuf_threshold.kbps", "1.0"));
+        PRE_BUFFERED_MIN_TOTAL_BYTES        = Long.parseLong(cfg.getProperty(  "youtube.eval.bandwidth.prebuf_min_total_bytes","1000000"));
+        MIN_SFN_CONNECTION_SPEED_KBPS       = Double.parseDouble(cfg.getProperty("youtube.eval.sfn.min_connection_speed.kbps","2500.0"));
+        SFN_BUF_HEALTH_CONSEC_ZERO_FAIL     = Integer.parseInt(cfg.getProperty("youtube.eval.sfn.buffer_health.consecutive_zero_fail", "2"));
+    }
 
-
-    /**
-     * Minimum average bandwidth across the 30-second monitoring window.
-     * 250 KB/s ≈ 2 Mbps — minimum for consistent HD streaming.
-     */
-    private static final double MIN_AVG_BANDWIDTH_KBPS = 250.0;
+    private static Properties loadConfig() {
+        Properties p = new Properties();
+        try (InputStream is = PerformanceEvaluator.class.getClassLoader()
+                .getResourceAsStream("youtube-thresholds.properties")) {
+            if (is != null) {
+                p.load(is);
+            } else {
+                logger.warn("'youtube-thresholds.properties' not found — using built-in threshold defaults");
+            }
+        } catch (IOException e) {
+            logger.warn("Failed to load 'youtube-thresholds.properties': {} — using built-in defaults", e.getMessage());
+        }
+        return p;
+    }
 
     /**
      * Evaluates the seven internet-health checks for one YouTube video tab.
@@ -113,19 +141,17 @@ public class PerformanceEvaluator {
             bufOk
         ));
 
-        // 6. Live bandwidth — average throughput measured during the 30-second window.
+        // 6. Live bandwidth — average throughput measured during the monitoring window.
         //
         // Special case: pre-buffered video.
         // If the player downloaded all of its data BEFORE the monitoring window started
         // (during tab setup + latch sync), every sweep sees 0 new segments because the
         // player is already idle with a deep buffer. avgBandwidthKBps will be 0 (or a
-        // tiny rounding artefact < 1 KB/s) while totalVideoSegmentBytes is large.
-        // This is the best-case scenario — not a failure.
-        // We use a 1 KB/s threshold rather than exact zero to absorb floating-point noise
-        // from the JavaScript bandwidth calculation.
+        // tiny rounding artefact below PRE_BUFFERED_BANDWIDTH_THRESHOLD_KBPS) while
+        // totalVideoSegmentBytes is large.  This is the best-case scenario — not a failure.
         List<NetworkSample> samples = m.getNetworkSamples();
-        boolean preBuffered = m.getAvgBandwidthKBps() < 1.0
-            && m.getTotalVideoSegmentBytes() > 1_000_000;   // > 1 MB transferred in total
+        boolean preBuffered = m.getAvgBandwidthKBps() < PRE_BUFFERED_BANDWIDTH_THRESHOLD_KBPS
+            && m.getTotalVideoSegmentBytes() > PRE_BUFFERED_MIN_TOTAL_BYTES;
         boolean bwOk;
         String bwActual;
         if (preBuffered) {
@@ -192,20 +218,28 @@ public class PerformanceEvaluator {
                 ));
             }
 
-            // 9. SFN Buffer Health — FAIL only when any monitoring sweep recorded 0 s,
-            //    which means the buffer was fully drained (imminent stall).
-            //    Transient dips above 0 are acceptable; only a genuine empty-buffer
-            //    event during playback is actionable.
+            // 9. SFN Buffer Health — FAIL only when SFN_BUF_HEALTH_CONSEC_ZERO_FAIL or more
+            //    consecutive monitoring sweeps recorded 0 s (buffer fully drained).
+            //    A single isolated 0 s reading is a transient glitch; only a sustained
+            //    drain across back-to-back sweeps signals a real stall.
             if (sfn.getBufferHealthSecs() >= 0) {
-                boolean anyZero = m.getNetworkSamples().stream()
-                    .anyMatch(s -> s.getBufferHealthSecs() == 0.0);
-                boolean sfnBufOk = !anyZero;
-                String actual = anyZero
-                    ? "0 s hit (buffer drained)"
-                    : String.format("%.2f s avg (min > 0)", sfn.getBufferHealthSecs());
+                int maxConsecZeros = 0;
+                int currentRun    = 0;
+                for (NetworkSample s : m.getNetworkSamples()) {
+                    if (s.getBufferHealthSecs() >= 0 && s.getBufferHealthSecs() == 0.0) {
+                        currentRun++;
+                        if (currentRun > maxConsecZeros) maxConsecZeros = currentRun;
+                    } else {
+                        currentRun = 0;
+                    }
+                }
+                boolean sfnBufOk = maxConsecZeros < SFN_BUF_HEALTH_CONSEC_ZERO_FAIL;
+                String actual = sfnBufOk
+                    ? String.format("%.2f s avg (max consec 0s: %d)", sfn.getBufferHealthSecs(), maxConsecZeros)
+                    : String.format("%d consecutive 0 s sweeps (buffer drained)", maxConsecZeros);
                 checks.add(check(
                     "SFN Buffer Health",
-                    "never 0 s during sweeps",
+                    "< " + SFN_BUF_HEALTH_CONSEC_ZERO_FAIL + " consecutive 0 s sweeps",
                     actual,
                     sfnBufOk
                 ));
@@ -291,14 +325,15 @@ public class PerformanceEvaluator {
 
         StatisticsEngine.Stats bufStats = StatisticsEngine.compute(bufValues);
         if (bufStats != null) {
-            // Lower bound = mean - 1σ.  If this dips below MIN_BUFFERED_SECS the
-            // buffer was sometimes insufficient even if the average looks fine.
-            double lowerBound = bufStats.lcl(1.0);
+            // Lower bound = mean - k*σ where k = BUFFER_CONSISTENCY_LCL_SIGMA.
+            // If this dips below MIN_BUFFERED_SECS the buffer was sometimes insufficient
+            // even if the average looks fine.
+            double lowerBound = bufStats.lcl(BUFFER_CONSISTENCY_LCL_SIGMA);
             boolean bufConsistent = lowerBound >= MIN_BUFFERED_SECS;
             String sampleNote = bufStats.isReliable() ? "" : "  [limited n=" + bufStats.n + "]";
             checks.add(check(
                 "Buffer Depth Consistency",
-                String.format("μ−1σ ≥ %.0f s (never dips low)", MIN_BUFFERED_SECS),
+                String.format("μ−%.0fσ ≥ %.0f s (never dips low)", BUFFER_CONSISTENCY_LCL_SIGMA, MIN_BUFFERED_SECS),
                 String.format("μ=%.1f s  σ=%.1f s  μ−1σ=%.1f s%s",
                     bufStats.mean, bufStats.stddev, lowerBound, sampleNote),
                 bufConsistent

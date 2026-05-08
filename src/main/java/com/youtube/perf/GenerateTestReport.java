@@ -214,7 +214,7 @@ public class GenerateTestReport {
         Function<String, WebsiteThresholds> thresholdsFor =
             d -> thresholdOverrides.getOrDefault(d, WebsiteThresholds.DEFAULT);
 
-        HtmlReporter reporter = new HtmlReporter(thresholdsFor);
+        HtmlReporter reporter = new HtmlReporter(thresholdsFor, 120);
         String outPath = "target/net_performance_report.html";
         reporter.saveReport(ytMetrics, webMetrics, dnsResults, verdicts, outPath);
         System.out.println("Report generated: " + outPath);

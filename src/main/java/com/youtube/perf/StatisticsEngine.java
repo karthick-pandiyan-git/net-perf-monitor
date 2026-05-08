@@ -1,6 +1,14 @@
 package com.youtube.perf;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Properties;
 
 /**
  * Utility that computes descriptive statistics for a sample of values and
@@ -20,11 +28,48 @@ import java.util.List;
  */
 public class StatisticsEngine {
 
-    /** Minimum samples for {@link Stats#isReliable()} to return {@code true}. */
-    public static final int MIN_RELIABLE_SAMPLES = 10;
+    private static final Logger logger = LoggerFactory.getLogger(StatisticsEngine.class);
 
-    /** Below this count statistics are computed but treated as low-confidence. */
-    public static final int MIN_USABLE_SAMPLES = 3;
+    /**
+     * Minimum samples for {@link Stats#isReliable()} to return {@code true}.
+     * Loaded from {@code statistics.properties} (key: {@code stats.engine.min_reliable_samples}).
+     */
+    public static final int MIN_RELIABLE_SAMPLES;
+
+    /**
+     * Below this count statistics are computed but treated as low-confidence.
+     * Loaded from {@code statistics.properties} (key: {@code stats.engine.min_usable_samples}).
+     */
+    public static final int MIN_USABLE_SAMPLES;
+
+    /** Sigma multiplier for outlier detection when the sample is reliable (n {@code >=} {@link #MIN_RELIABLE_SAMPLES}). */
+    static final double SIGMA_OUTLIER_RELIABLE;
+
+    /** Sigma multiplier for outlier detection when the sample is limited (n {@code <} {@link #MIN_RELIABLE_SAMPLES}). */
+    static final double SIGMA_OUTLIER_LIMITED;
+
+    static {
+        Properties cfg = loadConfig();
+        MIN_RELIABLE_SAMPLES   = Integer.parseInt(cfg.getProperty("stats.engine.min_reliable_samples", "10"));
+        MIN_USABLE_SAMPLES     = Integer.parseInt(cfg.getProperty("stats.engine.min_usable_samples",   "3"));
+        SIGMA_OUTLIER_RELIABLE = Double.parseDouble(cfg.getProperty("stats.engine.sigma.outlier.reliable", "2.0"));
+        SIGMA_OUTLIER_LIMITED  = Double.parseDouble(cfg.getProperty("stats.engine.sigma.outlier.limited",  "3.0"));
+    }
+
+    private static Properties loadConfig() {
+        Properties p = new Properties();
+        try (InputStream is = StatisticsEngine.class.getClassLoader()
+                .getResourceAsStream("statistics.properties")) {
+            if (is != null) {
+                p.load(is);
+            } else {
+                logger.warn("'statistics.properties' not found — using built-in statistics defaults");
+            }
+        } catch (IOException e) {
+            logger.warn("Failed to load 'statistics.properties': {} — using built-in defaults", e.getMessage());
+        }
+        return p;
+    }
 
     // ── Grade enum ────────────────────────────────────────────────────────────
 
@@ -89,9 +134,12 @@ public class StatisticsEngine {
 
         /**
          * The sigma multiplier to use for outlier detection, adjusted for sample size.
-         * Small samples use a stricter 3σ gate to reduce false positives.
+         * Small samples use a stricter gate to reduce false positives.
+         * Values come from {@code statistics.properties} via {@link StatisticsEngine}.
          */
-        public double outlierSigma() { return isReliable() ? 2.0 : 3.0; }
+        public double outlierSigma() {
+            return isReliable() ? SIGMA_OUTLIER_RELIABLE : SIGMA_OUTLIER_LIMITED;
+        }
 
         /** Upper control limit: mean + k·stddev. */
         public double ucl(double k) { return mean + k * stddev; }
@@ -137,6 +185,48 @@ public class StatisticsEngine {
         double max = values.stream().mapToDouble(Double::doubleValue).max().orElse(0);
 
         return new Stats(n, mean, stddev, min, max);
+    }
+
+    /**
+     * Computes a <em>robust</em> baseline using Median Absolute Deviation (MAD).
+     *
+     * <p>Unlike {@link #compute}, this method is immune to the <em>outlier-masking</em>
+     * effect where a single extreme value inflates σ enough to hide itself from the
+     * μ+5σ threshold.  The returned {@link Stats} stores the <em>median</em> as the
+     * "mean" and {@code 1.4826 × MAD} as the "stddev".  The 1.4826 scale factor makes
+     * the MAD-based σ equivalent to the sample σ for normally-distributed data, so
+     * callers can use {@code st.ucl(5.0)} to obtain the same μ+5σ-equivalent threshold,
+     * now computed from a baseline that ignores outliers.
+     *
+     * <p>Falls back to {@link #compute} when MAD is zero (all values identical).
+     *
+     * @param values list of observed numeric values; {@code null} / empty → returns {@code null}
+     * @return a robust {@link Stats} object, or {@code null} when fewer than
+     *         {@link #MIN_USABLE_SAMPLES} values are provided
+     */
+    public static Stats computeRobust(List<Double> values) {
+        if (values == null || values.size() < MIN_USABLE_SAMPLES) return null;
+
+        List<Double> sorted = new ArrayList<>(values);
+        Collections.sort(sorted);
+        int n = sorted.size();
+
+        double median = (n % 2 == 0)
+                ? (sorted.get(n / 2 - 1) + sorted.get(n / 2)) / 2.0
+                : sorted.get(n / 2);
+
+        List<Double> devs = new ArrayList<>(n);
+        for (double v : values) devs.add(Math.abs(v - median));
+        Collections.sort(devs);
+        double mad = (n % 2 == 0)
+                ? (devs.get(n / 2 - 1) + devs.get(n / 2)) / 2.0
+                : devs.get(n / 2);
+
+        // MAD = 0 when all values are identical or too tightly clustered; fall back.
+        if (mad == 0.0) return compute(values);
+
+        double robustSigma = 1.4826 * mad;
+        return new Stats(n, median, robustSigma, sorted.get(0), sorted.get(n - 1));
     }
 
     // ── Classification ────────────────────────────────────────────────────────
@@ -201,5 +291,19 @@ public class StatisticsEngine {
     public static long countHighOutliers(List<Double> values, Stats stats) {
         if (stats == null || values == null) return 0;
         return values.stream().filter(v -> isHighOutlier(v, stats)).count();
+    }
+
+    /**
+     * Counts the number of values in {@code values} that exceed {@code mean + sigma * stddev},
+     * using an explicit sigma multiplier instead of the sample-size-adjusted default.
+     *
+     * @param values list of observed values
+     * @param stats  reference distribution (must not be {@code null})
+     * @param sigma  sigma multiplier for the upper control limit (e.g. 5.0 for μ+5σ)
+     * @return count of values above the explicit UCL
+     */
+    public static long countHighOutliersAtSigma(List<Double> values, Stats stats, double sigma) {
+        if (stats == null || values == null || !stats.isUsable()) return 0;
+        return values.stream().filter(v -> v > stats.ucl(sigma)).count();
     }
 }
